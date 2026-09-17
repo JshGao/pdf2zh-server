@@ -83,7 +83,14 @@ func writePNG(_ image: CGImage, to path: String) {
     }
 }
 
-/// Draw a single centered glyph and return the box it occupied.
+/// Draw a single glyph centred on its *ink* box and return the box it occupied.
+///
+/// Centring on the ink box rather than the typographic line box matters a lot for CJK:
+/// PingFang reports ascent 1.06em and descent 0.34em, so the line box is 1.4em tall while
+/// a hanzi only inks roughly 0.92em sitting entirely above the baseline. Deriving the
+/// origin from ascent/descent therefore parks the character visibly high. `opticalShiftEm`
+/// then nudges it for the fact that hanzi carry more stroke weight in their upper half,
+/// so a mathematically centred glyph still reads as slightly too high.
 @discardableResult
 func drawCenteredGlyph(
     _ text: String,
@@ -91,7 +98,7 @@ func drawCenteredGlyph(
     canvas: CGFloat,
     fontSize: CGFloat,
     color: CGColor,
-    yOffset: CGFloat = 0
+    opticalShiftEm: CGFloat = 0
 ) -> CGRect {
     let font = chineseFont(size: fontSize)
     // CoreText attribute names directly, so this tool needs neither AppKit nor UIKit.
@@ -101,19 +108,50 @@ func drawCenteredGlyph(
     ]
     let attributed = NSAttributedString(string: text, attributes: attributes)
     let line = CTLineCreateWithAttributedString(attributed)
-    let bounds = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
-    let ascent = CTFontGetAscent(font)
-    let descent = CTFontGetDescent(font)
+    let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
 
-    // Optical centering: use the glyph ink box, not the line box, so the character
-    // sits in the middle of the tile instead of slightly high (CJK fonts have a deep
-    // descent reserved for Latin descenders).
-    let originX = (canvas - bounds.width) / 2 - bounds.minX
-    let originY = (canvas - (ascent + descent)) / 2 + descent - bounds.minY + yOffset
+    let originX = (canvas - ink.width) / 2 - ink.minX
+    let originY = (canvas - ink.height) / 2 - ink.minY + opticalShiftEm * fontSize
 
     context.textPosition = CGPoint(x: originX, y: originY)
     CTLineDraw(line, context)
-    return CGRect(x: originX + bounds.minX, y: originY + bounds.minY, width: bounds.width, height: bounds.height)
+    return CGRect(x: originX + ink.minX, y: originY + ink.minY, width: ink.width, height: ink.height)
+}
+
+/// The status bar mark: the 译 character inside a rounded square outline.
+///
+/// The outline gives it the graphic weight of a real icon next to the system glyphs,
+/// which a bare hanzi lacks, while the minimal stroke count keeps it legible at 22pt.
+/// Everything (stroke width, corner radius, glyph size, clearances) is expressed as a
+/// fraction of the canvas so the same description renders correctly at 16pt and 1024pt.
+func drawFramedMark(in context: CGContext, canvas: CGFloat, color: CGColor) {
+    let strokeWidth = canvas * 0.075
+    // Inset by half the stroke so the outline's outer edge lands on the canvas edge
+    // rather than being clipped by it.
+    let inset = strokeWidth / 2 + canvas * 0.02
+    let rect = CGRect(
+        x: inset, y: inset, width: canvas - inset * 2, height: canvas - inset * 2
+    )
+    let radius = canvas * 0.26
+
+    context.saveGState()
+    context.addPath(
+        CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
+    )
+    context.setStrokeColor(color)
+    context.setLineWidth(strokeWidth)
+    context.setLineJoin(.round)
+    context.strokePath()
+    context.restoreGState()
+
+    drawCenteredGlyph(
+        "译",
+        in: context,
+        canvas: canvas,
+        fontSize: canvas * 0.52,
+        color: color,
+        opticalShiftEm: -0.018
+    )
 }
 
 /// The macOS-style rounded tile, drawn as a path so it scales to any size.
@@ -168,7 +206,7 @@ drawCenteredGlyph(
     canvas: masterCanvas,
     fontSize: masterCanvas * 0.52,
     color: CGColor(red: 1, green: 1, blue: 1, alpha: 1),
-    yOffset: masterCanvas * 0.005
+    opticalShiftEm: -0.018
 )
 guard let masterImage = master.makeImage() else {
     FileHandle.standardError.write(Data("无法生成主图标位图\n".utf8))
@@ -213,16 +251,14 @@ if let preview = previewContext.makeImage() {
 
 // MARK: - Status bar image
 
-// Rendered with transparent padding and a black glyph so macOS can treat it as a
-// template image: it is tinted black on a light menu bar and white on a dark one.
+// Black mark on transparent background so macOS can treat it as a template image: it is
+// tinted black on a light menu bar and white on a dark one. Sized 22pt because that is
+// what the app hands to NSStatusItem; rendering at 2x keeps it crisp on Retina.
 let statusPixels = 44 // 22pt @2x
 let statusContext = makeContext(width: statusPixels, height: statusPixels)
-let statusCanvas = CGFloat(statusPixels)
-drawCenteredGlyph(
-    "译",
+drawFramedMark(
     in: statusContext,
-    canvas: statusCanvas,
-    fontSize: statusCanvas * 0.80,
+    canvas: CGFloat(statusPixels),
     color: CGColor(red: 0, green: 0, blue: 0, alpha: 1)
 )
 if let statusImage = statusContext.makeImage() {

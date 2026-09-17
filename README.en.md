@@ -52,8 +52,8 @@ You can also grab a prebuilt `PDF2ZH Web-<version>.dmg` (the app plus a shortcut
 or `PDF2ZH Web-<version>.zip` from Releases. Push a `v*` tag and CI builds, verifies and packages
 both on a macOS runner.
 
-Once launched, a **译 glyph** (the Chinese character for "translate") appears in the menu bar: it is a
-black-on-transparent template image,
+Once launched, a **rounded square framing the 译 glyph** (the Chinese character for "translate") appears
+in the menu bar: it is a black-on-transparent template image,
 so macOS draws it black on a light menu bar and white on a dark one. It never shows up in the Dock or
 in Cmd-Tab (`LSUIElement=true`). In Finder, the app icon is a deep-blue rounded tile with a white 译.
 

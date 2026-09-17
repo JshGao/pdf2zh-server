@@ -253,9 +253,19 @@ pdf2zh-server/
 
 ### 7.3 状态栏图标
 
-优先使用 bundle 里的 `pdf2zh-status.png`（20×20pt，`isTemplate = true`）：macOS 会按菜单栏明暗
+优先使用 bundle 里的 `pdf2zh-status.png`（22pt，`isTemplate = true`）：macOS 会按菜单栏明暗
 自动着色，浅色栏显示黑色、深色栏显示白色。取不到时回退到 SF Symbols
 （`translate` → `character.book.closed` → `doc.text.magnifyingglass` → `doc.text`），再不行用文字"译"。
+
+图形是**圆角方框 + "译"字**：纯汉字在菜单栏里视觉重量偏轻，跟旁边的系统图标不搭；加一圈描边后
+重量相当，同时兼作图形元素，比裸字更像个图标。全部尺寸由画布比例推导（描边 7.5%、圆角半径 26%、
+字号 52%、内缩 2%），所以同一份描述在 16pt 和 1024pt 都成立，不存在位图缩放。
+
+**垂直定位必须基于墨迹边界，不能用 ascent/descent。** PingFang 报告 ascent 1.06em、descent 0.34em，
+行框高 1.4em，而汉字墨迹只有约 0.92em 且完全在基线之上；由 ascent/descent 反推原点会把字顶高
+（实测偏移约 13% 画布高）。因此统一用 `CTLineGetBoundsWithOptions(.useGlyphPathBounds)` 的墨迹框
+居中，再用 `opticalShiftEm = -0.018` 做光学补偿——汉字上半部笔画更密，几何居中看起来仍偏高。
+App 图标里的"译"字同理。
 
 图标由 `scripts/make-icons.swift` 用 CoreGraphics/CoreText 直接光栅化生成，矢量描述在代码里，
 每个尺寸独立渲染而不是位图缩放。这是**原创标识**（深蓝圆角底板 + 白色"译"字），不使用上游

@@ -48,8 +48,8 @@ PDF2ZH_REGEN_ICONS=1 ./build.sh   # 改了 scripts/make-icons.swift 后重新渲
 也可以直接下载 Releases 里现成的产物：`PDF2ZH Web-<版本>.dmg`（内含 App 和指向 `/Applications` 的快捷方式）
 或 `PDF2ZH Web-<版本>.zip`。推一个 `v*` 标签，CI 会在 macOS runner 上构建、验收并打包发布。
 
-启动后右上角状态栏出现**"译"字图标**：这是一张黑字 + 透明底的模板图，浅色菜单栏显示为黑色，
-深色菜单栏自动变白。程序坞和 Cmd-Tab 里都不会出现它（`LSUIElement=true`）。
+启动后右上角状态栏出现**圆角方框 + "译"字**的图标：这是一张黑字 + 透明底的模板图，
+浅色菜单栏显示为黑色，深色菜单栏自动变白。程序坞和 Cmd-Tab 里都不会出现它（`LSUIElement=true`）。
 Finder 里看到的 App 图标则是深蓝圆角底板 + 白色"译"字。
 
 ### 菜单
