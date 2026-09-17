@@ -82,10 +82,6 @@ func writePNG(_ image: CGImage, to path: String) {
 /// deriving the origin from ascent/descent parks the character visibly high (~13% of the
 /// canvas). The extra `shift` then corrects the optical centre, because hanzi carry more
 /// stroke weight in their upper half and so still read slightly high when centred exactly.
-///
-/// The Latin side is set larger than the hanzi on purpose: 文 has many strokes and
-/// therefore more ink, while A has three. Matching the two by cap height leaves the pair
-/// visibly lopsided, so the A is scaled up until the two halves read at equal weight.
 /// The infinity curve, built from four cubic Béziers and centred on `center`.
 ///
 /// The two lobes are drawn as one closed loop, so the waist crossing comes out of the
@@ -93,14 +89,17 @@ func writePNG(_ image: CGImage, to path: String) {
 /// to it from above, and the right lobe mirrors that. Both strokes pass through exactly
 /// the same point, which is what makes the crossing read as a single continuous ribbon.
 ///
-/// The proportions are deliberate. `lobeHalfHeight` (0.29 of the canvas) is what separates
+/// The proportions are deliberate. `lobeHalfHeight` (0.265 of the canvas) is what separates
 /// a real ∞ from a bow tie — flatten it much further and the lobes collapse into two kinked
-/// squares. `controlPull` (0.40) keeps the belly round instead of pinching the waist. All
-/// values are fractions of the canvas so one description serves 16pt and 1024pt alike.
+/// squares, while growing it makes the mark too tall for a 22pt status item. `controlPull`
+/// (0.42) keeps the belly round instead of pinching the waist. `halfWidth` (0.375) is capped
+/// by the stroke width: at 0.195 the ink already spans 94.5% of the canvas, so widening the
+/// curve further would push the outline off the edge. All values are fractions of the canvas
+/// so one description serves 16pt and 1024pt alike.
 func infinityPath(center: CGPoint, size: CGFloat) -> CGPath {
-    let halfWidth = size * 0.380
-    let lobeHalfHeight = size * 0.29
-    let controlPull: CGFloat = 0.40
+    let halfWidth = size * 0.375
+    let lobeHalfHeight = size * 0.265
+    let controlPull: CGFloat = 0.42
     let cx = center.x
     let cy = center.y
 
@@ -133,27 +132,30 @@ func infinityPath(center: CGPoint, size: CGFloat) -> CGPath {
     return path
 }
 
-/// The status bar mark: a single stroked ∞. No text, no frame — just the curve.
+/// The status bar mark: a single heavy stroked ∞. No text, no frame, no internal detail.
 ///
-/// The stroke is 8.5% of the canvas, which is what brings the mark to roughly the same
-/// optical weight as the surrounding system glyphs. It is drawn as a stroke rather than a
-/// filled outline so the two lobes stay open and the mark still reads at 16pt.
+/// The stroke is 19.5% of the canvas — deliberately far heavier than a "correct" stroke
+/// weight would be. At 22pt a thin outline reads as a hairline scribble next to the solid
+/// system glyphs it sits among; a heavy stroke gives the mark the same blocky presence.
+/// Earlier revisions drew a thin outline with a decorative inner spiral, which turned to
+/// mud at this size: any interior detail is unreadable here, so the curve is the whole mark.
 func drawFramedMark(in context: CGContext, canvas: CGFloat, color: CGColor) {
     context.saveGState()
     context.addPath(infinityPath(center: CGPoint(x: canvas / 2, y: canvas / 2), size: canvas))
     context.setStrokeColor(color)
-    context.setLineWidth(canvas * 0.085)
+    context.setLineWidth(canvas * 0.195)
     context.setLineJoin(.round)
     context.setLineCap(.round)
     context.strokePath()
     context.restoreGState()
 }
 
-/// The app icon: a rounded tile with a blue gradient and a white ∞ centred on it.
+/// The app icon: a rounded tile with a blue gradient and a heavy white ∞ centred on it.
 ///
 /// The gradient (rather than a flat fill) plus the generous inset are what keep it from
 /// reading as a placeholder. The ∞ is sized to the tile, not the canvas, so the optical
-/// margin stays constant no matter how much bleed the icon needs.
+/// margin stays constant no matter how much bleed the icon needs; its stroke keeps the same
+/// 19.5% ratio as the status bar mark so both read as the same object at different scales.
 func drawAppTile(in context: CGContext, canvas: CGFloat) {
     let inset = canvas * 0.055
     let rect = CGRect(x: inset, y: inset, width: canvas - inset * 2, height: canvas - inset * 2)
@@ -186,10 +188,10 @@ func drawAppTile(in context: CGContext, canvas: CGFloat) {
     // the tile at every icon size while staying clearly open in the middle.
     context.saveGState()
     context.addPath(
-        infinityPath(center: CGPoint(x: rect.midX, y: rect.midY), size: rect.width * 0.82)
+        infinityPath(center: CGPoint(x: rect.midX, y: rect.midY), size: rect.width * 0.78)
     )
     context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-    context.setLineWidth(rect.width * 0.082)
+    context.setLineWidth(rect.width * 0.78 * 0.195)
     context.setLineJoin(.round)
     context.setLineCap(.round)
     context.strokePath()
