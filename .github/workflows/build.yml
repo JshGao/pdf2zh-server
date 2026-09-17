@@ -47,8 +47,15 @@ jobs:
       - name: 预热 BabelDOC 资产（避免 CI 上 SQLite 冷启动竞争）
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          pdf2zh_next --warmup
-          ls -la "$HOME/.cache/babeldoc" | head -10
+          # --warmup downloads the assets but does not exit afterwards: it falls through to the
+          # translation path and dies on "At least one input file is required". That non-zero
+          # exit is expected, so it is tolerated — what matters is that the catalogue and its
+          # SQLite file now exist, which is checked explicitly below. Without this priming the
+          # service itself dies with "database is locked" on a cold runner.
+          pdf2zh_next --warmup || true
+          ls -la "$HOME/.cache/babeldoc"
+          test -f "$HOME/.cache/babeldoc/cache.v1.db" \
+            || { echo "BabelDOC 资产库未生成，预热失败" >&2; exit 1; }
 
       - name: 构建
         env:
