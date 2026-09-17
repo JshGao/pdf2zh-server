@@ -41,6 +41,38 @@ wait_for() {
   return 1
 }
 
+# Print whatever would explain a failure to start. Safe to call when everything worked:
+# it only emits when a log actually exists. Truncated because CI logs are easier to scan
+# than they are to scroll.
+dump_diagnostics() {
+  print -r -- ""
+  print -r -- "  ---- 诊断信息（供 CI 排查）----"
+  for f in "$LOG_PATH" "$SUPPORT_DIR/config.json"; do
+    if [[ -f "$f" ]]; then
+      print -r -- "  [文件] $f"
+      tail -30 "$f" 2>/dev/null | sed 's/^/    | /'
+    else
+      print -r -- "  [缺失] $f"
+    fi
+  done
+  print -r -- "  [自检] pdf2zh_next 能否执行："
+  local exe
+  exe="$(python3 -c "
+import json,sys
+try:
+    print(json.load(open('$SUPPORT_DIR/config.json')).get('pdf2zhPath',''))
+except Exception:
+    print('')
+" 2>/dev/null)"
+  if [[ -n "$exe" && -x "$exe" ]]; then
+    print -r -- "    路径: $exe"
+    "$exe" --version 2>&1 | tail -5 | sed 's/^/    | /'
+  else
+    print -r -- "    未找到可执行文件（config 中 pdf2zhPath='$exe'）"
+  fi
+  print -r -- "  ------------------------------"
+}
+
 app_running() { pgrep -f "$EXEC_NAME" >/dev/null 2>&1; }
 port_listening() { lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; }
 service_running() { pgrep -f "pdf2zh_next.*--gui" >/dev/null 2>&1; }
@@ -128,6 +160,9 @@ if wait_for 60 port_listening; then
   pass "端口 $PORT 正在监听"
 else
   fail "60 秒内端口 $PORT 未监听（看日志：$LOG_PATH）"
+  # Without this the failure is invisible on CI, where the runner's disk disappears with the
+  # job: "port never opened" is a symptom, and the cause is always in one of these.
+  dump_diagnostics
 fi
 
 if wait_for 10 service_running; then

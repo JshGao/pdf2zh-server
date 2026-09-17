@@ -47,6 +47,19 @@ jobs:
       - name: 验收
         run: ./scripts/verify.sh
 
+      # verify.sh prints startup diagnostics on failure; keep them as an artefact so a red
+      # run can be diagnosed without re-running it.
+      - name: 上传验收诊断（仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-diagnostics
+          path: |
+            ~/Library/Logs/pdf2zh-web.log
+            ~/Library/Logs/pdf2zh-zotero.log
+            ~/Library/Application Support/PDF2ZHWeb/config.json
+          if-no-files-found: warn
+
       - name: 打包（.zip / .dmg）
         run: ./scripts/package.sh "${{ steps.version.outputs.value }}"
 
