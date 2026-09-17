@@ -54,8 +54,8 @@ both on a macOS runner.
 
 Once launched, **two interlocking loops** (the author's own vector mark) appear in the menu bar: it is a black-on-transparent template image,
 so macOS draws it black on a light menu bar and white on a dark one. It never shows up in the Dock or
-in Cmd-Tab (`LSUIElement=true`). In Finder, the app icon is a rounded blue gradient tile with a
-centred white ∞.
+in Cmd-Tab (`LSUIElement=true`). In Finder, the app icon is a liquid-glass rounded tile
+carrying the same mark in white.
 
 ### Menu
 

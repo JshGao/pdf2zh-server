@@ -136,38 +136,118 @@ func fittedMark(in box: CGRect, fill: CGFloat) -> CGPath {
 }
 
 /// The status bar mark: the interlocking loops, filled.
-func drawFramedMark(in context: CGContext, canvas: CGFloat, color: CGColor) {
+func drawFramedMark(in context: CGContext, size: CGSize, color: CGColor) {
     context.saveGState()
-    context.addPath(fittedMark(in: CGRect(x: 0, y: 0, width: canvas, height: canvas), fill: 0.94))
+    context.addPath(fittedMark(in: CGRect(origin: .zero, size: size), fill: 0.94))
     context.setFillColor(color)
     // Non-zero: the two loops interlock, so their overlap must stay solid.
     context.fillPath()
     context.restoreGState()
 }
 
-/// The app icon: a rounded tile with a blue gradient carrying the mark in white.
+/// The app icon: a liquid-glass tile carrying the mark.
 ///
-/// Same artwork as the status bar mark (see `interlockingLoopsPath`), just fitted to the
-/// tile at 80% and filled non-zero. The gradient rather than a flat fill, plus the generous
-/// inset, are what keep it from reading as a placeholder.
+/// macOS 26 ships `NSGlassEffectView`, but that is a view-level material and cannot be
+/// rendered offscreen into an .icns, so the glass is composited by hand. Five layers, in
+/// order, which is what sells the material:
+///
+/// 1. a diagonal blue gradient for the body of the glass,
+/// 2. a radial highlight from the upper edge — the specular sheen light leaves on glass,
+/// 3. a cool reflection rising from the lower edge, the light that bounced off the surface
+///    the icon sits on,
+/// 4. the mark, with a soft dark shadow behind it so it reads as set *into* the glass
+///    rather than painted on top, and a subtle white-to-cool-white gradient for sheen,
+/// 5. two rim strokes: a bright hairline on the outer edge and a dimmer one just inside it,
+///    which is what gives the tile visible thickness.
+///
+/// Layers 2, 3 and 5 are the whole trick — a flat gradient alone reads as plastic.
 func drawAppTile(in context: CGContext, canvas: CGFloat) {
     let inset = canvas * 0.055
     let rect = CGRect(x: inset, y: inset, width: canvas - inset * 2, height: canvas - inset * 2)
     let radius = rect.width * 0.2237 // Apple's squircle-ish corner ratio
-    let path = CGPath(
+    let tile = CGPath(
         roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil
     )
 
+    // 1) Body of the glass.
     context.saveGState()
-    context.addPath(path)
+    context.addPath(tile)
     context.clip()
-
-    let colors = [
-        CGColor(red: 0.145, green: 0.451, blue: 0.914, alpha: 1.0),
-        CGColor(red: 0.055, green: 0.263, blue: 0.698, alpha: 1.0)
+    let bodyColors = [
+        CGColor(red: 0.36, green: 0.66, blue: 1.00, alpha: 1.0),
+        CGColor(red: 0.05, green: 0.22, blue: 0.60, alpha: 1.0)
     ] as CFArray
     if let gradient = CGGradient(
-        colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]
+        colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: bodyColors, locations: [0, 1]
+    ) {
+        context.drawLinearGradient(
+            gradient,
+            start: CGPoint(x: rect.minX, y: rect.maxY),
+            end: CGPoint(x: rect.maxX, y: rect.minY),
+            options: []
+        )
+    }
+
+    // 2) Specular sheen from above.
+    let sheenCenter = CGPoint(x: rect.midX, y: rect.maxY - rect.height * 0.10)
+    if let gradient = CGGradient(
+        colorsSpace: CGColorSpaceCreateDeviceRGB(),
+        colors: [
+            CGColor(red: 1, green: 1, blue: 1, alpha: 0.55),
+            CGColor(red: 1, green: 1, blue: 1, alpha: 0.0)
+        ] as CFArray,
+        locations: [0, 1]
+    ) {
+        context.drawRadialGradient(
+            gradient,
+            startCenter: sheenCenter, startRadius: 0,
+            endCenter: sheenCenter, endRadius: rect.width * 0.72,
+            options: []
+        )
+    }
+
+    // 3) Reflected light rising from below.
+    let bounceCenter = CGPoint(x: rect.midX, y: rect.minY + rect.height * 0.06)
+    if let gradient = CGGradient(
+        colorsSpace: CGColorSpaceCreateDeviceRGB(),
+        colors: [
+            CGColor(red: 0.60, green: 0.82, blue: 1.00, alpha: 0.28),
+            CGColor(red: 0.60, green: 0.82, blue: 1.00, alpha: 0.0)
+        ] as CFArray,
+        locations: [0, 1]
+    ) {
+        context.drawRadialGradient(
+            gradient,
+            startCenter: bounceCenter, startRadius: 0,
+            endCenter: bounceCenter, endRadius: rect.width * 0.55,
+            options: []
+        )
+    }
+    context.restoreGState()
+
+    // 4) The mark, engraved into the glass.
+    let markPath = fittedMark(in: rect, fill: 0.80)
+    context.saveGState()
+    context.addPath(markPath)
+    context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    context.setShadow(
+        offset: CGSize(width: 0, height: -canvas * 0.012),
+        blur: canvas * 0.030,
+        color: CGColor(red: 0.0, green: 0.05, blue: 0.20, alpha: 0.55)
+    )
+    context.fillPath()
+    context.restoreGState()
+
+    context.saveGState()
+    context.addPath(markPath)
+    context.clip()
+    if let gradient = CGGradient(
+        colorsSpace: CGColorSpaceCreateDeviceRGB(),
+        colors: [
+            CGColor(red: 1, green: 1, blue: 1, alpha: 1.0),
+            CGColor(red: 0.86, green: 0.93, blue: 1.00, alpha: 1.0)
+        ] as CFArray,
+        locations: [0, 1]
     ) {
         context.drawLinearGradient(
             gradient,
@@ -178,12 +258,25 @@ func drawAppTile(in context: CGContext, canvas: CGFloat) {
     }
     context.restoreGState()
 
+    // 5) Glass thickness: bright outer hairline plus a dimmer inner one.
+    context.saveGState()
+    context.addPath(tile)
+    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.55))
+    context.setLineWidth(canvas * 0.006)
+    context.strokePath()
+    context.restoreGState()
+
     context.saveGState()
     context.addPath(
-        fittedMark(in: rect, fill: 0.80)
+        CGPath(
+            roundedRect: rect.insetBy(dx: canvas * 0.010, dy: canvas * 0.010),
+            cornerWidth: radius * 0.95, cornerHeight: radius * 0.95, transform: nil
+        )
     )
-    context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-    context.fillPath()
+    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.16))
+    context.setLineWidth(canvas * 0.010)
+    context.strokePath()
+    context.restoreGState()
 }
 
 // MARK: - App icon (1024pt master)
@@ -237,13 +330,22 @@ if let preview = previewContext.makeImage() {
 // MARK: - Status bar image
 
 // Black mark on transparent background so macOS can treat it as a template image: it is
-// tinted black on a light menu bar and white on a dark one. Sized 22pt because that is
-// what the app hands to NSStatusItem; rendering at 2x keeps it crisp on Retina.
-let statusPixels = 44 // 22pt @2x
-let statusContext = makeContext(width: statusPixels, height: statusPixels)
+// tinted black on a light menu bar and white on a dark one.
+//
+// The canvas is cropped tight to the mark's ink bounds rather than being square, so the
+// image's own aspect ratio *is* the mark's aspect ratio. The app then only has to pick a
+// height and let the width follow (see main.swift) — with a square canvas it would have to
+// guess, and a 1.8:1 mark in a 1:1 image gets scaled down to fit the wrong dimension.
+//
+// Rendered at 2x the display size so it stays crisp on Retina.
+let statusInk = interlockingLoopsPath().boundingBoxOfPath
+let statusHeightPt: CGFloat = 16
+let statusHeightPx = Int((statusHeightPt * 2).rounded())
+let statusWidthPx = Int((statusHeightPt * 2 * statusInk.width / statusInk.height).rounded())
+let statusContext = makeContext(width: statusWidthPx, height: statusHeightPx)
 drawFramedMark(
     in: statusContext,
-    canvas: CGFloat(statusPixels),
+    size: CGSize(width: statusWidthPx, height: statusHeightPx),
     color: CGColor(red: 0, green: 0, blue: 0, alpha: 1)
 )
 if let statusImage = statusContext.makeImage() {

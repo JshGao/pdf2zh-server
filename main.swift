@@ -311,18 +311,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func buildMenu() {
-        let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        // variableLength, not squareLength: the mark is wider than it is tall (roughly
+        // 1.8:1), so a square status item would force it into a square box and shrink it.
+        let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.statusItem = statusItem
 
         if let button = statusItem.button {
-            // The bundled template image (black glyph on transparent) is the primary
-            // icon: macOS tints it automatically for light/dark menu bars, and it is the
-            // same 译 mark the app uses in the Dock. SF Symbols are the fallback for a
-            // bundle that was built without the icon artefacts.
+            // The bundled template image (black mark on transparent) is the primary icon:
+            // macOS tints it automatically for light/dark menu bars.
             var image: NSImage?
             if let path = Bundle.main.path(forResource: "pdf2zh-status", ofType: "png"),
                let bundled = NSImage(contentsOfFile: path) {
-                bundled.size = NSSize(width: 20, height: 20)
+                // The PNG is cropped tight to the artwork and rendered at 2x the size it is
+                // shown at, so the bitmap's aspect ratio is already correct: scale it to the
+                // target height and let the width follow. Setting a square size here (as an
+                // earlier revision did) squashed a 1.8:1 mark into a square and made it look
+                // small. The 2x source means this stays sharp at the drawn size.
+                let targetHeight: CGFloat = bundled.size.height / 2
+                let aspect = bundled.size.width / max(bundled.size.height, 1)
+                bundled.size = NSSize(width: targetHeight * aspect, height: targetHeight)
                 bundled.isTemplate = true
                 image = bundled
             } else {
