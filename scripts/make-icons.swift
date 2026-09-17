@@ -33,39 +33,6 @@ let fileManager = FileManager.default
 
 try? fileManager.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
 
-/// A font that actually has the glyph we need; Helvetica silently renders .notdef.
-func chineseFont(size: CGFloat, bold: Bool = true, character: String = "文") -> CTFont {
-    let names = bold
-        ? ["PingFangSC-Semibold", "PingFang SC", "STHeitiSC-Medium", "HiraginoSansGB-W6", "Helvetica"]
-        : ["PingFangSC-Regular", "PingFang SC", "STHeitiSC-Light", "HiraginoSansGB-W3", "Helvetica"]
-    let probe: [UniChar] = Array(character.utf16)
-    for name in names {
-        let font = CTFontCreateWithName(name as CFString, size, nil)
-        var glyphs = [CGGlyph](repeating: 0, count: probe.count)
-        if CTFontGetGlyphsForCharacters(font, probe, &glyphs, probe.count), glyphs[0] != 0 {
-            return font
-        }
-    }
-    return CTFontCreateWithName("PingFang SC" as CFString, size, nil)
-}
-
-/// Helvetica Bold: a squarer, heavier A than PingFang's Latin, which is what keeps the
-/// Latin half from looking weak next to a dense hanzi.
-func latinFont(size: CGFloat) -> CTFont {
-    CTFontCreateWithName("Helvetica-Bold" as CFString, size, nil)
-}
-
-/// Build a single-run line with CoreText attribute names directly, so this tool needs
-/// neither AppKit nor UIKit.
-func makeLine(_ text: String, font: CTFont, color: CGColor) -> CTLine {
-    let attributes: [NSAttributedString.Key: Any] = [
-        NSAttributedString.Key(kCTFontAttributeName as String): font,
-        NSAttributedString.Key(kCTForegroundColorAttributeName as String): color
-    ]
-    return CTLineCreateWithAttributedString(
-        NSAttributedString(string: text, attributes: attributes)
-    )
-}
 
 func makeContext(width: Int, height: Int) -> CGContext {
     guard let context = CGContext(
@@ -119,55 +86,74 @@ func writePNG(_ image: CGImage, to path: String) {
 /// The Latin side is set larger than the hanzi on purpose: 文 has many strokes and
 /// therefore more ink, while A has three. Matching the two by cap height leaves the pair
 /// visibly lopsided, so the A is scaled up until the two halves read at equal weight.
-func drawFramedMark(in context: CGContext, canvas: CGFloat, color: CGColor) {
-    let strokeWidth = canvas * 0.072
-    // Inset by half the stroke so the outline's outer edge lands on the canvas edge
-    // rather than being clipped by it.
-    let inset = strokeWidth / 2 + canvas * 0.032
-    let rect = CGRect(
-        x: inset, y: inset, width: canvas - inset * 2, height: canvas - inset * 2
-    )
-    let radius = canvas * 0.25
+/// The infinity curve, built from four cubic Béziers and centred on `center`.
+///
+/// The two lobes are drawn as one closed loop, so the waist crossing comes out of the
+/// geometry rather than being faked: the left lobe leaves the centre downwards, returns
+/// to it from above, and the right lobe mirrors that. Both strokes pass through exactly
+/// the same point, which is what makes the crossing read as a single continuous ribbon.
+///
+/// The proportions are deliberate. `lobeHalfHeight` (0.29 of the canvas) is what separates
+/// a real ∞ from a bow tie — flatten it much further and the lobes collapse into two kinked
+/// squares. `controlPull` (0.40) keeps the belly round instead of pinching the waist. All
+/// values are fractions of the canvas so one description serves 16pt and 1024pt alike.
+func infinityPath(center: CGPoint, size: CGFloat) -> CGPath {
+    let halfWidth = size * 0.380
+    let lobeHalfHeight = size * 0.29
+    let controlPull: CGFloat = 0.40
+    let cx = center.x
+    let cy = center.y
 
-    context.saveGState()
-    context.addPath(
-        CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
+    let path = CGMutablePath()
+    path.move(to: CGPoint(x: cx - halfWidth, y: cy))
+    // Left lobe: out to the left, over the top, back to the middle.
+    path.addCurve(
+        to: CGPoint(x: cx, y: cy),
+        control1: CGPoint(x: cx - halfWidth, y: cy + lobeHalfHeight * 1.45),
+        control2: CGPoint(x: cx - halfWidth * controlPull, y: cy + lobeHalfHeight * 1.05)
     )
-    context.setStrokeColor(color)
-    context.setLineWidth(strokeWidth)
-    context.setLineJoin(.round)
-    context.strokePath()
-    context.restoreGState()
-
-    let hanSize = canvas * 0.40
-    let latinSize = hanSize * 1.24
-    let hanLine = makeLine("文", font: chineseFont(size: hanSize), color: color)
-    let latinLine = makeLine("A", font: latinFont(size: latinSize), color: color)
-    let hanInk = CTLineGetBoundsWithOptions(hanLine, .useGlyphPathBounds)
-    let latinInk = CTLineGetBoundsWithOptions(latinLine, .useGlyphPathBounds)
-
-    let gap = canvas * 0.02
-    let totalWidth = hanInk.width + gap + latinInk.width
-    let startX = rect.midX - totalWidth / 2
-    // Both characters sit on a common optical centre; the shift is the same hanzi
-    // correction described in drawFramedMark.
-    let shift = -0.010 * hanSize
-
-    context.textPosition = CGPoint(
-        x: startX - hanInk.minX,
-        y: rect.midY - hanInk.height / 2 - hanInk.minY + shift
+    // Right lobe: down from the middle, under the bottom, back out to the right.
+    path.addCurve(
+        to: CGPoint(x: cx + halfWidth, y: cy),
+        control1: CGPoint(x: cx + halfWidth * controlPull, y: cy + lobeHalfHeight * 1.05),
+        control2: CGPoint(x: cx + halfWidth, y: cy + lobeHalfHeight * 1.45)
     )
-    CTLineDraw(hanLine, context)
-    context.textPosition = CGPoint(
-        x: startX + hanInk.width + gap - latinInk.minX,
-        y: rect.midY - latinInk.height / 2 - latinInk.minY + shift
+    // Mirror of the above two, below the waist.
+    path.addCurve(
+        to: CGPoint(x: cx, y: cy),
+        control1: CGPoint(x: cx + halfWidth, y: cy - lobeHalfHeight * 1.45),
+        control2: CGPoint(x: cx + halfWidth * controlPull, y: cy - lobeHalfHeight * 1.05)
     )
-    CTLineDraw(latinLine, context)
+    path.addCurve(
+        to: CGPoint(x: cx - halfWidth, y: cy),
+        control1: CGPoint(x: cx - halfWidth * controlPull, y: cy - lobeHalfHeight * 1.05),
+        control2: CGPoint(x: cx - halfWidth, y: cy - lobeHalfHeight * 1.45)
+    )
+    path.closeSubpath()
+    return path
 }
 
-/// The app icon: a rounded tile split into a blue half and a light half, carrying the
-/// same 文 / A pairing as the status bar mark. The two-tone split is what gives the icon
-/// its depth — a single flat colour with a character on it reads as a placeholder.
+/// The status bar mark: a single stroked ∞. No text, no frame — just the curve.
+///
+/// The stroke is 8.5% of the canvas, which is what brings the mark to roughly the same
+/// optical weight as the surrounding system glyphs. It is drawn as a stroke rather than a
+/// filled outline so the two lobes stay open and the mark still reads at 16pt.
+func drawFramedMark(in context: CGContext, canvas: CGFloat, color: CGColor) {
+    context.saveGState()
+    context.addPath(infinityPath(center: CGPoint(x: canvas / 2, y: canvas / 2), size: canvas))
+    context.setStrokeColor(color)
+    context.setLineWidth(canvas * 0.085)
+    context.setLineJoin(.round)
+    context.setLineCap(.round)
+    context.strokePath()
+    context.restoreGState()
+}
+
+/// The app icon: a rounded tile with a blue gradient and a white ∞ centred on it.
+///
+/// The gradient (rather than a flat fill) plus the generous inset are what keep it from
+/// reading as a placeholder. The ∞ is sized to the tile, not the canvas, so the optical
+/// margin stays constant no matter how much bleed the icon needs.
 func drawAppTile(in context: CGContext, canvas: CGFloat) {
     let inset = canvas * 0.055
     let rect = CGRect(x: inset, y: inset, width: canvas - inset * 2, height: canvas - inset * 2)
@@ -180,62 +166,34 @@ func drawAppTile(in context: CGContext, canvas: CGFloat) {
     context.addPath(path)
     context.clip()
 
-    // Right half: cool light grey, the "target language" side.
-    context.setFillColor(CGColor(red: 0.847, green: 0.867, blue: 0.894, alpha: 1))
-    context.fill(rect)
-
-    // Left half: blue gradient, the "source language" side.
-    let splitRatio: CGFloat = 0.52
-    let blue = CGRect(
-        x: rect.minX, y: rect.minY, width: rect.width * splitRatio, height: rect.height
-    )
-    context.saveGState()
-    context.clip(to: blue)
     let colors = [
-        CGColor(red: 0.129, green: 0.420, blue: 0.882, alpha: 1.0),
-        CGColor(red: 0.086, green: 0.310, blue: 0.749, alpha: 1.0)
+        CGColor(red: 0.169, green: 0.478, blue: 0.925, alpha: 1.0),
+        CGColor(red: 0.075, green: 0.286, blue: 0.722, alpha: 1.0)
     ] as CFArray
     if let gradient = CGGradient(
         colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]
     ) {
         context.drawLinearGradient(
             gradient,
-            start: CGPoint(x: blue.minX, y: blue.maxY),
-            end: CGPoint(x: blue.maxX, y: blue.minY),
+            start: CGPoint(x: rect.minX, y: rect.maxY),
+            end: CGPoint(x: rect.maxX, y: rect.minY),
             options: []
         )
     }
     context.restoreGState()
+
+    // The ∞ is stroked at 9% of the tile, which keeps its ribbon weight in proportion to
+    // the tile at every icon size while staying clearly open in the middle.
+    context.saveGState()
+    context.addPath(
+        infinityPath(center: CGPoint(x: rect.midX, y: rect.midY), size: rect.width * 0.82)
+    )
+    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    context.setLineWidth(rect.width * 0.082)
+    context.setLineJoin(.round)
+    context.setLineCap(.round)
+    context.strokePath()
     context.restoreGState()
-
-    // 文 in white on the blue side, A in near-black on the light side. Each is centred on
-    // its own half, which is why the two halves are measured independently.
-    let hanSize = canvas * 0.30
-    let latinSize = canvas * 0.355
-    let hanLine = makeLine(
-        "文", font: chineseFont(size: hanSize),
-        color: CGColor(red: 1, green: 1, blue: 1, alpha: 1)
-    )
-    let latinLine = makeLine(
-        "A", font: latinFont(size: latinSize),
-        color: CGColor(red: 0.180, green: 0.208, blue: 0.267, alpha: 1)
-    )
-    let hanInk = CTLineGetBoundsWithOptions(hanLine, .useGlyphPathBounds)
-    let latinInk = CTLineGetBoundsWithOptions(latinLine, .useGlyphPathBounds)
-    let shift = -0.010 * hanSize
-
-    context.textPosition = CGPoint(
-        x: blue.midX - hanInk.width / 2 - hanInk.minX,
-        y: rect.midY - hanInk.height / 2 - hanInk.minY + shift
-    )
-    CTLineDraw(hanLine, context)
-
-    let lightHalfMidX = (blue.maxX + rect.maxX) / 2
-    context.textPosition = CGPoint(
-        x: lightHalfMidX - latinInk.width / 2 - latinInk.minX,
-        y: rect.midY - latinInk.height / 2 - latinInk.minY + shift
-    )
-    CTLineDraw(latinLine, context)
 }
 
 // MARK: - App icon (1024pt master)

@@ -48,10 +48,9 @@ PDF2ZH_REGEN_ICONS=1 ./build.sh   # 改了 scripts/make-icons.swift 后重新渲
 也可以直接下载 Releases 里现成的产物：`PDF2ZH Web-<版本>.dmg`（内含 App 和指向 `/Applications` 的快捷方式）
 或 `PDF2ZH Web-<版本>.zip`。推一个 `v*` 标签，CI 会在 macOS runner 上构建、验收并打包发布。
 
-启动后右上角状态栏出现**圆角方框 + "文 A"**的图标：这是一张黑字 + 透明底的模板图，
+启动后右上角状态栏出现一个**描边的 ∞**：这是一张黑字 + 透明底的模板图，
 浅色菜单栏显示为黑色，深色菜单栏自动变白。程序坞和 Cmd-Tab 里都不会出现它（`LSUIElement=true`）。
-Finder 里看到的 App 图标是同一套语言的放大版：圆角底板竖直分割成蓝色与浅灰两半，蓝色半边放白色"文"、
-浅灰半边放深色"A"。
+Finder 里看到的 App 图标是圆角蓝色渐变底板 + 居中的白色 ∞。
 
 ### 菜单
 
@@ -214,10 +213,10 @@ pdf2zh-server/
 ├── build.sh                    # 构建 .app：编译 + 图标 + Info.plist + ad-hoc 签名
 ├── assets/
 │   ├── AppIcon.icns            # 提交的 App 图标产物（构建时的真源）
-│   ├── pdf2zh-status.png       # 提交的状态栏图标产物（黑字 + 透明底，可作模板图）
+│   ├── pdf2zh-status.png       # 提交的状态栏图标产物（描边 ∞，黑字 + 透明底，可作模板图）
 │   └── icon-preview.png        # README 预览图
 ├── scripts/
-│   ├── make-icons.swift        # CoreGraphics/CoreText 渲染图标（原创"文 A"标识）
+│   ├── make-icons.swift        # CoreGraphics/CoreText 渲染图标（原创 ∞ 标识）
 │   ├── package.sh              # 打包 .dmg / .zip
 │   └── verify.sh               # 验收：静态检查 + 运行期检查 + 退出清理检查
 ├── .github/workflows/build.yml # CI：构建 + 验收；打标签时发布 Release
@@ -251,8 +250,8 @@ pdf2zh-server/
 - 本项目是 [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next) 的
   **非官方**启动器，不修改上游源码，只调用其 CLI（`pdf2zh_next --gui`）。
 - 概念与工程结构参考 [DSH-desktop-server](https://github.com/JshGao/DSH-desktop-server)（MIT）。
-- 图标为本项目原创：`scripts/make-icons.swift` 用 CoreGraphics/CoreText 直接渲染的"文 A"标识
-  （圆角底板双色分割 + 中文字符与拉丁字母并置），**不含**上游 PDFMathTranslate 的任何美术资源。
+- 图标为本项目原创：`scripts/make-icons.swift` 用 CoreGraphics/CoreText 直接渲染的 ∞ 标识
+  （描边无限符号 / 圆角渐变底板），**不含**上游 PDFMathTranslate 的任何美术资源。
 - 本项目的代码以 [MIT](LICENSE) 许可发布。
 
 ---

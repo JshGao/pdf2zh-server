@@ -198,7 +198,7 @@ pdf2zh-server/
 ├── build.sh                    # 构建 .app：编译 + 图标 + Info.plist + ad-hoc 签名
 ├── assets/
 │   ├── AppIcon.icns            # 提交的 App 图标产物（构建时的真源）
-│   ├── pdf2zh-status.png       # 提交的状态栏图标产物（黑字 + 透明底，可作模板图）
+│   ├── pdf2zh-status.png       # 提交的状态栏图标产物（描边 ∞，黑字 + 透明底，可作模板图）
 │   └── icon-preview.png        # README 预览图
 ├── scripts/
 │   ├── make-icons.swift        # CoreGraphics/CoreText 渲染图标（原创"文A"标识，不含上游美术资源）
@@ -255,23 +255,32 @@ pdf2zh-server/
 
 **状态栏图标**优先使用 bundle 里的 `pdf2zh-status.png`（22pt，`isTemplate = true`）：macOS 会按
 菜单栏明暗自动着色，浅色栏显示黑色、深色栏显示白色。取不到时回退到 SF Symbols
-（`translate` → `character.book.closed` → `doc.text.magnifyingglass` → `doc.text`），再不行用文字"文A"。
+（`translate` → `character.book.closed` → `doc.text.magnifyingglass` → `doc.text`），再不行用文字"∞"。
 
-图形是**圆角方框 + "文 A"**，设计语言取自常见的翻译类应用图标：中文字符与拉丁字母并置，
-直接表达"中译外"。纯汉字在菜单栏里视觉重量偏轻，跟旁边的系统图标不搭；加一圈描边后重量相当，
-同时兼作图形元素。全部尺寸由画布比例推导（描边 7.2%、圆角半径 25%、内缩 3.2%、汉字 40%），
-所以同一份描述在 16pt 和 1024pt 都成立，不存在位图缩放。
+图形就是一个**描边的 ∞**：没有外框、没有文字。它是 PDF2ZH（PDF → 中文）"无损往返"的直觉表达，
+而单个符号在 22pt 下的清晰度远好于任何"字 + 图形"的组合。
 
-两个字符的**字号刻意不等**：汉字"文"笔画多、墨量大，而"A"只有三笔。按字高对齐会让整组左重右轻，
-所以拉丁侧放大到汉字的 1.24 倍，直到左右两半读起来重量相当。
+**几何由四段三次贝塞尔构成一个闭合环**（`infinityPath`）。两瓣共用同一个腰部交点，让交叉点由
+几何自然产生而不是靠两根线叠出来——这样笔画在腰部干净地压合，读起来是一条连续丝带。两个比例是
+关键（均为画布比例）：
 
-**垂直定位必须基于墨迹边界，不能用 ascent/descent。** PingFang 报告 ascent 1.06em、descent 0.34em，
-行框高 1.4em，而汉字墨迹只有约 0.92em 且完全在基线之上；由 ascent/descent 反推原点会把字顶高
-（实测偏移约 13% 画布高）。因此统一用 `CTLineGetBoundsWithOptions(.useGlyphPathBounds)` 的墨迹框
-居中，再叠一个光学补偿偏移——汉字上半部笔画更密，几何居中看起来仍偏高。
+| 参数 | 取值 | 作用 |
+|---|---|---|
+| `halfWidth` | 0.380 | 横向半宽；连笔画后墨迹横占 84.5%，四边各留约 8%，避免贴边 |
+| `lobeHalfHeight` | 0.290 | 环的纵向半高；压得再扁，两瓣就退化成两个带折角的方块（"蝴蝶结"） |
+| `controlPull` | 0.400 | 控制点收拢程度；太小会掐细腰部，太大则瓣形变方 |
+| 笔画宽 | 0.085 | 与周围系统图标的光学重量相当 |
 
-**App 图标**是同一套语言的放大版：圆角底板竖直分割成蓝色（渐变）与浅灰两半，蓝色半边放白色"文"、
-浅灰半边放深色"A"，各自在自己半边居中。双色分割是它质感的来源——单色底板压一个字符只会像占位图。
+早前的备选方案（双纽线参数方程）形状正确但需要**填充**才能闭合——填充后两瓣实心，
+在菜单栏尺寸下过重，故采用描边方案。
+
+**App 图标**是圆角底板上一个居中的白色 ∞，底板用蓝色渐变（不是平涂，平涂会显得像占位图），
+∞ 按底板宽度 82% 绘制、笔画 8.2%。
+
+**曾经的方案与放弃原因**（避免后人重走）：圆角框 + 单字"译"（视觉重量偏轻、字与框易挤）；
+圆角框 + "文 A" 并置（模仿常见翻译类图标，但两个复杂形状在 22pt 下互相挤压）；
+"译"字压在 ∞ 上或嵌入环内（实测确认：22pt 下两个复杂形状无法都保持可辨）。
+若日后要恢复文字，必须先解决这个尺寸下的清晰度冲突，而不是简单叠加。
 
 图标由 `scripts/make-icons.swift` 用 CoreGraphics/CoreText 直接光栅化生成，矢量描述在代码里，
 每个尺寸独立渲染而不是位图缩放。这是**原创标识**，不使用上游 PDFMathTranslate 的任何美术资源。
@@ -530,5 +539,5 @@ md5 ~/.config/pdf2zh/config.v3.toml   # 必须与之前一致
 - 本项目是 [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next)
   的**非官方**启动器，不修改上游源码，只调用其 CLI（`pdf2zh_next --gui`）。
 - 概念与工程结构参考 [DSH-desktop-server](https://github.com/JshGao/DSH-desktop-server)（MIT）。
-- 图标为本项目原创（`scripts/make-icons.swift` 渲染的"文 A"标识），不含上游美术资源。
+- 图标为本项目原创（`scripts/make-icons.swift` 渲染的 ∞ 标识），不含上游美术资源。
 - 本项目代码以 [MIT](LICENSE) 许可发布。
