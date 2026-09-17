@@ -129,31 +129,20 @@ func infinityOutline(center: CGPoint, width: CGFloat) -> CGPath {
 }
 
 /// Add the two ribbon holes to an outline, returning a path meant to be filled even-odd.
-///
-/// The holes are tilted ellipses rather than circles: squashing and rotating them along
-/// each lobe's axis makes the remaining material read as a twisted band instead of a
-/// doughnut with two punctures. The tilt is mirrored per side so the pair stays symmetric
-/// about the vertical axis, which is what keeps the mark from looking lopsided.
 func infinityRibbon(center: CGPoint, width: CGFloat) -> CGPath {
     let path = CGMutablePath()
     path.addPath(infinityOutline(center: center, width: width))
-
-    let offset = width * 0.25      // hole centre distance from the middle
-    let radiusX = width * 0.134    // along the lobe axis
-    let radiusY = width * 0.086    // across it
-    let tilt: CGFloat = 38 * .pi / 180
-
+    let offset = width * 0.29
+    let radius = width * 0.175
     for sign in [-1.0, 1.0] {
-        let hole = CGMutablePath()
-        hole.addEllipse(
-            in: CGRect(x: -radiusX, y: -radiusY, width: radiusX * 2, height: radiusY * 2)
+        path.addEllipse(
+            in: CGRect(
+                x: center.x + CGFloat(sign) * offset - radius,
+                y: center.y - radius,
+                width: radius * 2,
+                height: radius * 2
+            )
         )
-        var transform = CGAffineTransform(
-            translationX: center.x + CGFloat(sign) * offset, y: center.y
-        ).rotated(by: tilt * CGFloat(sign))
-        if let rotated = hole.copy(using: &transform) {
-            path.addPath(rotated)
-        }
     }
     return path
 }
@@ -164,9 +153,7 @@ func infinityRibbon(center: CGPoint, width: CGFloat) -> CGPath {
 /// system glyphs as a hairline, while the filled ribbon has the same blocky presence.
 func drawFramedMark(in context: CGContext, canvas: CGFloat, color: CGColor) {
     context.saveGState()
-    context.addPath(
-        infinityRibbon(center: CGPoint(x: canvas / 2, y: canvas / 2), width: canvas * 0.96)
-    )
+    context.addPath(infinityRibbon(center: CGPoint(x: canvas / 2, y: canvas / 2), width: canvas * 0.96))
     context.setFillColor(color)
     context.fillPath(using: .evenOdd)
     context.restoreGState()
