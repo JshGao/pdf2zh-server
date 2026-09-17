@@ -17,8 +17,13 @@
 2. `pdf2zh_next --gui` 启动时会调用 `webbrowser.open()`，即使你只是想让它常驻后台，它也会弹浏览器抢焦点；
 3. 服务在后台跑着，没有任何地方能看到"它到底活着没有"。
 
+另外还有一个**完全不同的**服务容易被混淆：Zotero 的 PDF2zh 插件并不调用上面的 Gradio 界面，
+而是调用另一个上游项目 [zotero-pdf2zh](https://github.com/guaguastandup/zotero-pdf2zh) 的
+`server.py`（Flask HTTP API，默认 8890）。两者协议不同、端口不同、连仓库都不同；插件指向
+Gradio 的端口时会报"这个地址上不是 PDF2zh Server"。本 App 因此同时托管两个服务。
+
 本项目仿照 [DSH-desktop-server](https://github.com/JshGao/DSH-desktop-server) 的概念，做一个只有状态栏
-图标、不占程序坞的包装器，把这三件事一次解决。
+图标、不占程序坞的包装器，把这些事一次解决。
 
 ---
 
@@ -27,6 +32,7 @@
 - 双击即用：启动 App 就等于在后台跑起 `pdf2zh_next --gui`，无需终端。
 - 状态可见：状态栏图标常驻，菜单第一行实时显示服务的真实状态。
 - 一键可达：菜单里能直接打开 WebUI、复制地址、打开日志与输出文件夹。
+- 两个服务一起管：WebUI（7860）与 Zotero API（8890）各自独立启停、各自显示状态。
 - 退得干净：退出 App（含注销 / 关机 / 崩溃 / 强杀）后不留任何残留进程和端口占用。
 - 不越权：不修改上游源码，不接管用户的翻译引擎配置，不悄悄改动用户的 pdf2zh 配置文件。
 
@@ -63,6 +69,9 @@
 | FR-12 | 同时只允许一个 App 实例；端口已被占用时不重复启动，而是提示 |
 | FR-13 | 首次启动生成带说明的配置模板，让配置项可被发现 |
 | FR-14 | 菜单可查看 pdf2zh_next 版本与运行环境（路径、端口、工作目录、日志路径） |
+| FR-15 | 托管 zotero-pdf2zh 的 `server.py`，默认端口 8890，与 WebUI 独立启停 |
+| FR-16 | 状态栏菜单为两个服务各显示一行状态；并提供"复制 Zotero 插件地址" |
+| FR-17 | 未安装 server.py 时如实显示"未安装"，并给出获取方式；不影响 WebUI 运行 |
 
 ### 3.2 非功能需求
 
@@ -85,21 +94,63 @@
 NSApplication(.accessory)
   └─ AppDelegate
        ├─ AppConfig         启动时一次性加载（环境变量 > config.json > 默认值）
-       ├─ 状态机            starting / running / stopped / problem / missingDependency
        ├─ NSStatusItem      状态栏图标 + 菜单
-       ├─ posix_spawn       /bin/zsh -c <supervisor 脚本>，独立进程组
-       └─ Timer(0.5s)       回收子进程 + 探测端口就绪
+       ├─ ManagedService    服务生命周期（每个服务一个实例）
+       │    ├─ spec         名字、可执行文件、参数、端口、日志、超时
+       │    ├─ 状态机       stopped / starting / running / problem / missing
+       │    ├─ posix_spawn  /bin/zsh -c <supervisor 脚本>，独立进程组
+       │    └─ 看门狗       组内子 shell，App 消失后收尾
+       ├─ webService        pdf2zh_next --gui        → 7860
+       ├─ zoteroService     server.py（可选）        → 8890
+       └─ Timer(0.5s)       对两个服务各做一次回收 + 端口探测
 ```
+
+**两个服务共用同一个 `ManagedService`。** 进程组、看门狗、日志轮转、端口探测、超时与清理
+对两者完全一致，只有"可执行文件 + 参数 + 端口 + 超时"不同，因此抽成 `ServiceSpec` 数据，
+生命周期逻辑只实现一次——避免两份几乎相同的 spawn / killpg 代码各自漂移。
 
 ### 4.2 状态机
 
-| 状态 | 进入条件 | 菜单首行 |
+每个 `ManagedService` 各有一个状态机，两个服务互不影响（WebUI 启动失败不会阻止 Zotero 服务）。
+
+| 状态 | 进入条件 | 菜单行（以 Zotero 为例） |
 |---|---|---|
-| `stopped` | 初始；用户主动停止后 | `PDF2ZH Web：已停止` |
-| `starting` | spawn 成功后 | `PDF2ZH Web：启动中…（端口 N）` |
-| `running(url)` | 端口可连接，或日志解析出 Gradio URL | `PDF2ZH Web：运行中（端口 N）` |
-| `problem(reason)` | 端口被占用 / 启动超时 / 进程异常退出 | `PDF2ZH Web：<原因>` |
-| `missingDependency` | 探测不到 pdf2zh_next 可执行文件 | `PDF2ZH Web：未找到 pdf2zh_next` |
+| `stopped` | 初始；用户主动停止后 | `Zotero 服务：已停止` |
+| `starting` | spawn 成功后 | `Zotero 服务：启动中…（端口 8890）` |
+| `running` | 端口可连接 | `Zotero 服务：运行中（端口 8890）` |
+| `problem(reason)` | 端口被占用 / 启动超时 / 进程异常退出 | `Zotero 服务：<原因>` |
+| `missing` | 探测不到 server.py | `Zotero 服务：未安装（点击查看获取方式）` |
+
+就绪只以**端口可连接**为准（不再解析日志 URL）：两个服务都是绑定端口之后才能应答，这个信号
+对两者都可靠，且不依赖各自的输出格式。WebUI 仍会解析 Gradio banner，但那只是增强。
+
+### 4.2.1 Zotero 服务（第二个被托管的服务）
+
+| 项目 | 值 |
+|---|---|
+| 上游 | [zotero-pdf2zh](https://github.com/guaguastandup/zotero-pdf2zh)（与 pdf2zh_next 是**不同**项目） |
+| 客户端 | Zotero 的 PDF2zh 插件（`pdf2zh@guaguastandup.com.xpi`） |
+| 入口 | `server.py`，默认 `~/zotero-pdf2zh/server/server.py` |
+| 解释器 | 同目录的 `.venv/bin/python`（Flask 等依赖装在这里，不是系统 Python） |
+| 端口 | 8890 |
+| 健康端点 | `GET /health` → `{"message":"PDF2zh Server is running","status":"ok",...}` |
+
+**插件正是靠 `/health` 的这句 message 识别服务**；指向 Gradio 的 7860 时会拿不到它，
+于是报"这个地址上不是 PDF2zh Server"。这也解释了为什么两个服务不能互相替代。
+
+**一个必须绕开的坑：`server.py` 会在启动时做环境检查，发现问题就 `input()` 等一个 y/n 回答。**
+本 App 给子进程的 stdin 是 `/dev/null`，那个 `input()` 会抛 `EOFError` 直接退出——无人值守
+启动必须处理。做法是用管道喂答案：
+
+```zsh
+printf 'y\nn\n' | <venv>/bin/python <server.py> --port 8890
+```
+
+第一个 `y` 答"是否继续启动"（该检查是提示性的，答 y 即可正常启动；答 n 会直接取消）；
+第二个 `n` 答"是否更新翻译环境"——**已配置好的环境必须保持不动**，一个每次启动都静默重装
+依赖的服务比不自动更新糟糕得多。用户想更新时按上游文档跑 `update_packages.py`。
+
+配置项见 §7.1；`zoteroAutoStart` 为 false 时可只跑 WebUI（回到单服务行为）。
 
 只有 `running` 状态下"在浏览器中打开"和"复制服务地址"才可用。
 
@@ -226,7 +277,7 @@ pdf2zh-server/
 
 | 键 | 环境变量 | 默认值 | 说明 |
 |---|---|---|---|
-| `pdf2zhPath` | `PDF2ZH_PATH` | 自动探测 | 见 §7.2；探测不到则为空并进入 `missingDependency` |
+| `pdf2zhPath` | `PDF2ZH_PATH` | 自动探测 | 见 §7.2；探测不到则为空并进入 `missing` |
 | `workingDirectory` | `PDF2ZH_WORKDIR` | `~/PDF2ZH Workspace` | 服务工作目录，不存在自动创建 |
 | `webPort` | `PDF2ZH_WEB_PORT` | `7860` | 传给 `--server-port` |
 | `outputDirectory` | `PDF2ZH_OUTPUT_DIR` | 同 `workingDirectory` | "打开输出文件夹"指向的目录 |
@@ -237,6 +288,11 @@ pdf2zh-server/
 | `logMaxBytes` | — | `5242880` | 超过则轮转为 `.log.1` |
 | `startupTimeoutSeconds` | — | `60` | 等端口就绪的超时 |
 | `autoOpenBrowser` | `PDF2ZH_AUTO_OPEN` | `false` | true 时端口就绪后由 App 打开浏览器 |
+| `zoteroServerPath` | `PDF2ZH_ZOTERO_SERVER` | 自动探测 | `server.py` 路径；探测不到则整个 Zotero 服务不托管 |
+| `zoteroPythonPath` | `PDF2ZH_ZOTERO_PYTHON` | 同目录 `.venv/bin/python` | 运行 server.py 的解释器（Flask 装在这里） |
+| `zoteroPort` | `PDF2ZH_ZOTERO_PORT` | `8890` | Zotero 插件里要填的端口 |
+| `zoteroLogPath` | `PDF2ZH_ZOTERO_LOG` | `~/Library/Logs/pdf2zh-zotero.log` | 追加写入，权限 0600 |
+| `zoteroAutoStart` | `PDF2ZH_ZOTERO_AUTOSTART` | `true` | false 时只跑 WebUI |
 
 ### 7.2 pdf2zh_next 路径探测
 
@@ -250,7 +306,13 @@ pdf2zh-server/
 6. `~/.pyenv/versions/*/bin/pdf2zh_next`（版本号倒序）
 7. 继承来的 `PATH` 中任意目录下的 `pdf2zh_next`
 
-全部落空 → `pdf2zhPath` 为空 → 状态 `missingDependency`，菜单状态行明示并弹安装引导。
+全部落空 → `pdf2zhPath` 为空 → WebUI 状态为 `missing`，菜单状态行明示并弹安装引导。
+
+**Zotero 服务的探测**（`resolveZoteroServer` / `resolveZoteroPython`）：按
+`~/zotero-pdf2zh/server/server.py`、`~/Documents/…`、`~/Downloads/…`、`~/Applications/…`、
+`~/.zotero-pdf2zh/…` 依次探测 `server.py`；解释器优先取与 `server/` 同级的 `.venv/bin/python`
+（上游 release 的布局），再退到系统 python3。**探测不到 `server.py` 时整个 Zotero 服务不托管**
+——菜单只显示"未安装"，WebUI 完全不受影响；这是刻意的，因为多数用户并不用 Zotero 插件。
 
 ### 7.3 图标
 
@@ -324,28 +386,38 @@ SVG 换了什么 viewBox 或带多少边距，都不用改代码。
 
 | 菜单项 | 行为 |
 |---|---|
-| `PDF2ZH Web：<状态>` | 禁用状态行，实时反映状态机 |
-| 在浏览器中打开 ⌘O | 仅 `running` 可用 |
-| 复制服务地址 | 仅 `running` 可用；无 token，裸地址即可用 |
+| `PDF2ZH Web：<状态>` | 禁用状态行，实时反映 WebUI 状态机 |
+| `Zotero 服务：<状态>` | 禁用状态行；未安装时提示点击查看获取方式 |
+| 在浏览器中打开 ⌘O | 仅 WebUI `running` 可用 |
+| 复制服务地址 | 复制 WebUI 地址（`http://127.0.0.1:7860/`） |
+| 复制 Zotero 插件地址 | 复制 `http://127.0.0.1:8890`（不带路径，插件要的就是 host:port） |
 | 打开输出文件夹 | 不存在则创建后再打开 |
-| 打开日志 | 无日志时提示 |
+| 打开 WebUI 日志 / 打开 Zotero 服务日志 | 各自无日志时提示 |
 | 重新检查 pdf2zh_next | 重新探测路径；未装则弹安装引导 |
-| 重启 PDF2ZH Web ⌘R | stop → 等 0.4s → start（`waitForPortFree`） |
-| `pdf2zh_next：<版本>` | 点击显示运行环境详情（FR-14） |
-| 退出并停止 PDF2ZH Web ⌘Q | `NSApp.terminate` → 走清理路径 |
+| 重启 WebUI ⌘R | stop → 等 0.4s → start（`waitForPortFree`） |
+| 重启 Zotero 服务 | 同上；未安装时弹获取方式说明 |
+| `pdf2zh_next：<版本>` | 点击显示两个服务的运行环境详情（FR-14） |
+| 退出并停止全部服务 ⌘Q | `NSApp.terminate` → 两个服务都走清理路径 |
 
 ### 7.5 启动序列
 
 1. 取得单实例锁（flock）；失败则提示已有实例并退出。
 2. 后台异步执行 `pdf2zh_next --version` 取版本（也充当可执行性检查）。
 3. 首次启动时写配置模板。
-4. `pdf2zhPath` 为空 → `missingDependency` + 安装引导，结束。
+4. `pdf2zhPath` 为空 → 状态 `missing` + 安装引导；Zotero 服务仍会尝试启动。
 5. 创建 `workingDirectory` / `stateDirectory` / `outputDirectory`。
 6. 端口已被占用 → `problem("端口 N 已被占用")` + 弹窗，不重复启动。
 7. 准备日志文件（轮转 + 权限 0600），记录起始偏移量。
 8. `posix_spawn` supervisor，进入 `starting`，启动 0.5s 轮询。
+9. 若探测到 `server.py` 且 `zoteroAutoStart` 为真，对 Zotero 服务重复 5–8 步；两个服务各自
+   独立判断端口占用与超时，一个失败不影响另一个。轮询在两者都不再 `starting` 时自动停止。
 
 ### 7.6 supervisor 脚本模板
+
+两个服务共用同一份模板（`ManagedService.supervisorScript()`），只有 `<可执行文件>` 与参数不同：
+WebUI 传 `--gui --server-port N`；Zotero 服务传 `-c "printf 'y\nn\n' | <venv>/bin/python <server.py> --port 8890"`
+（理由见 §4.2.1 的交互提示坑）。
+
 
 ```zsh
 cd <workingDirectory> || { print -r -- "pdf2zh-web: cannot cd to" <workingDirectory>; exit 1; }
@@ -395,7 +467,9 @@ exit $rc
 | 服务进程自行退出（非主动停止） | 轮询发现 → `problem(日志尾部摘要)`，摘要优先取含 `EADDRINUSE` / `error` / `Traceback` 的行 |
 | App 崩溃 / `kill -9` | 组内看门狗清理（§4.5） |
 | 注销 / 关机 / `kill -TERM/-INT/-HUP` | 安装 `DispatchSourceSignal` 转 `NSApp.terminate`，走 `applicationWillTerminate` 的清理 |
-| `pdf2zh_next --version` 失败 | 空闲态下报 `problem("pdf2zh_next 无法执行")`；运行态下不覆盖端口这一更强证据 |
+| `pdf2zh_next --version` 失败 | 空闲态下更新菜单；运行态下不覆盖端口这一更强证据 |
+| 两个服务之一启动失败 | 只影响该服务的状态行；另一个照常运行（`ManagedService` 彼此独立） |
+| Zotero 服务卡在交互提示 | 已用 `printf 'y\nn\n'` 喂答案；见 §4.2.1 |
 
 ---
 

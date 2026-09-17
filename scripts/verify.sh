@@ -5,8 +5,11 @@
 #
 # Checks, in order:
 #   1. bundle structure, Info.plist (LSUIElement), signature, icon artefacts
-#   2. runtime: the app launches the service, the port answers, the log is private
-#   3. teardown: the app stops the service and leaves no processes behind
+#   2. runtime: the app launches both services, the ports answer, the logs are private
+#   3. teardown: the app stops both services and leaves no processes behind
+#
+# The Zotero service (zotero-pdf2zh's server.py) is optional: its checks are skipped when
+# server.py is not installed.
 #
 # The script starts the app if it is not already running, and leaves it stopped.
 set -uo pipefail
@@ -17,6 +20,9 @@ APP_DIR="$SRC_DIR/build/$APP_NAME.app"
 EXEC_NAME="PDF2ZHWebMenuBar"
 PORT="${PDF2ZH_WEB_PORT:-7860}"
 LOG_PATH="${PDF2ZH_LOG_PATH:-$HOME/Library/Logs/pdf2zh-web.log}"
+ZOTERO_PORT="${PDF2ZH_ZOTERO_PORT:-8890}"
+ZOTERO_LOG="${PDF2ZH_ZOTERO_LOG:-$HOME/Library/Logs/pdf2zh-zotero.log}"
+ZOTERO_SERVER="${PDF2ZH_ZOTERO_SERVER:-$HOME/zotero-pdf2zh/server/server.py}"
 SUPPORT_DIR="$HOME/Library/Application Support/PDF2ZHWeb"
 
 failures=0
@@ -38,6 +44,10 @@ wait_for() {
 app_running() { pgrep -f "$EXEC_NAME" >/dev/null 2>&1; }
 port_listening() { lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; }
 service_running() { pgrep -f "pdf2zh_next.*--gui" >/dev/null 2>&1; }
+zotero_port_listening() { lsof -nP -iTCP:"$ZOTERO_PORT" -sTCP:LISTEN >/dev/null 2>&1; }
+zotero_running() { pgrep -f "server.py --port" >/dev/null 2>&1; }
+# The Zotero service is optional: only check it when server.py is actually installed.
+zotero_expected() { [[ -r "$ZOTERO_SERVER" ]]; }
 
 # ---------------------------------------------------------------- 1. bundle
 section "1. bundle 结构"
@@ -152,6 +162,32 @@ else
   fail "配置模板未生成"
 fi
 
+if zotero_expected; then
+  if wait_for 90 zotero_port_listening; then
+    pass "Zotero 服务端口 $ZOTERO_PORT 正在监听"
+  else
+    fail "90 秒内端口 $ZOTERO_PORT 未监听（看日志：$ZOTERO_LOG）"
+  fi
+  if zotero_port_listening; then
+    health="$(curl -s --max-time 5 "http://127.0.0.1:$ZOTERO_PORT/health" 2>/dev/null)"
+    if [[ "$health" == *"PDF2zh Server is running"* ]]; then
+      pass "Zotero /health 返回正确标识（插件就是靠这句识别服务）"
+    else
+      fail "Zotero /health 未返回预期内容：${health:0:80}"
+    fi
+  fi
+  if [[ -f "$ZOTERO_LOG" ]]; then
+    zperm="$(stat -f '%Lp' "$ZOTERO_LOG" 2>/dev/null)"
+    if [[ "$zperm" == "600" ]]; then
+      pass "Zotero 服务日志权限为 0600"
+    else
+      fail "Zotero 服务日志权限为 $zperm，应为 600"
+    fi
+  fi
+else
+  pass "未安装 server.py，跳过 Zotero 服务检查（$ZOTERO_SERVER）"
+fi
+
 # ---------------------------------------------------------------- 3. teardown
 section "3. 退出清理"
 if app_running; then
@@ -186,6 +222,20 @@ if pgrep -f "$EXEC_NAME" >/dev/null 2>&1; then
   fail "App 仍有残留进程"
 else
   pass "无 App 残留进程"
+fi
+
+if zotero_expected; then
+  if wait_for 12 bash -c "! lsof -nP -iTCP:$ZOTERO_PORT -sTCP:LISTEN >/dev/null 2>&1"; then
+    pass "Zotero 服务端口 $ZOTERO_PORT 已释放"
+  else
+    fail "Zotero 服务端口 $ZOTERO_PORT 仍被占用"
+  fi
+  wait_for 12 bash -c "! pgrep -f 'server.py --port' >/dev/null 2>&1" >/dev/null 2>&1
+  if zotero_running; then
+    fail "仍有 zotero server 残留进程"
+  else
+    pass "无 zotero server 残留进程"
+  fi
 fi
 
 if [[ "$started_by_us" == "1" ]]; then

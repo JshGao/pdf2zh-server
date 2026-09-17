@@ -59,21 +59,31 @@ carrying the same mark in white.
 
 ### Menu
 
+The menu labels themselves are Chinese (the app is written for a Chinese-speaking user);
+this table translates them.
+
 | Item | What it does |
 |---|---|
-| `PDF2ZH Web：运行中（端口 7860）` | Status line (disabled): 启动中…（端口 N）/ 运行中（端口 N）/ 已停止 / failure reason / 未找到 pdf2zh_next |
-| 在浏览器中打开 ⌘O | Opens `http://127.0.0.1:<port>/`; enabled only while running |
-| 复制服务地址 | Copies the same URL to the clipboard; enabled only while running |
+| `PDF2ZH Web：运行中（端口 7860）` | WebUI status line (disabled): starting / running / stopped / failure reason |
+| `Zotero 服务：运行中（端口 8890）` | Zotero service status line (disabled); offers the install guide when absent |
+| 在浏览器中打开 ⌘O | Opens `http://127.0.0.1:7860/`; enabled only while running |
+| 复制服务地址 | Copies the WebUI URL to the clipboard |
+| 复制 Zotero 插件地址 | Copies `http://127.0.0.1:8890` — paste into the plugin's "Python Server IP" |
 | 打开输出文件夹 | Opens `outputDirectory`, creating it first if needed |
-| 打开日志 | Opens `~/Library/Logs/pdf2zh-web.log`, or says there is no log yet |
+| 打开 WebUI 日志 / 打开 Zotero 服务日志 | Opens each service's log |
 | 重新检查 pdf2zh_next | Re-probes for the executable; shows the install guide when missing |
-| 重启 PDF2ZH Web ⌘R | Stops the service and starts it again (use this after editing `config.json`) |
-| `pdf2zh_next：2.9.0` | Version line; click for the runtime details (version, executable, workdir, port, log, config path) |
-| 退出并停止 PDF2ZH Web ⌘Q | Quits the app and terminates the service with all of its children |
+| 重启 WebUI ⌘R | Stops the WebUI and starts it again (use this after editing `config.json`) |
+| 重启 Zotero 服务 | Same for the Zotero service; explains how to obtain it when absent |
+| `pdf2zh_next：2.9.0` | Version line; click for both services' runtime details |
+| 退出并停止全部服务 ⌘Q | Quits the app and terminates both services with all of their children |
 
 (The menu itself is Chinese, matching the upstream tool's audience.)
 
-Default address: <http://127.0.0.1:7860/>
+Default addresses: WebUI <http://127.0.0.1:7860/>, Zotero API <http://127.0.0.1:8890>
+
+> **Which one goes in the Zotero plugin?** `http://127.0.0.1:8890` — that is `server.py`'s HTTP
+> API, not the Gradio UI on 7860. They are different projects speaking different protocols;
+> pointing the plugin at 7860 fails with "this address is not a PDF2zh Server".
 
 > **No token — but the service listens on `0.0.0.0`, so your LAN can reach it.** This is the exact
 > opposite of the reference project DSH Web: DSH protects its GUI with a per-process token, while
@@ -152,6 +162,40 @@ because `pdf2zh_next` shells out to helper binaries.
 (case-insensitive); any other value is false.
 
 ---
+
+## Zotero plugin support (optional)
+
+Zotero's PDF2zh plugin does **not** call `pdf2zh_next`'s Gradio UI — it calls
+[zotero-pdf2zh](https://github.com/guaguastandup/zotero-pdf2zh)'s `server.py`, a separate
+project. This app detects and hosts it automatically: install it under `~/zotero-pdf2zh/`
+and a second status line appears in the menu.
+
+Setting it up takes three steps, once:
+
+```bash
+# 1. Download and unpack into ~/zotero-pdf2zh
+curl -L https://github.com/guaguastandup/zotero-pdf2zh/releases/latest/download/server.zip -o /tmp/server.zip
+mkdir -p ~/zotero-pdf2zh && ditto -x -k /tmp/server.zip ~/zotero-pdf2zh/
+
+# 2. Create a venv and install the server's own dependencies (Flask and friends)
+cd ~/zotero-pdf2zh
+~/.local/share/uv/python/cpython-3.12-macos-aarch64-none/bin/python3.12 -m venv .venv
+./.venv/bin/pip install -r server/requirements.txt
+
+# 3. Make its directories writable, then restart the Zotero service from the menu
+chmod -R u+w server/config server/translated
+```
+
+Then set Zotero's "Tools → PDF2zh Preferences → Python Server IP" to `http://127.0.0.1:8890`
+(or use "Copy Zotero plugin address" in the menu).
+
+> The first translation provisions a pdf2zh_next environment inside the server, which takes a
+> few minutes. Later launches are quick.
+>
+> This app answers `server.py`'s startup prompts with `printf 'y\\nn\\n'` — the `y` means "ignore
+> the advisory check and start", the `n` means "do not auto-update the translation environment".
+> **A working environment is never silently reinstalled**; run `python update_packages.py` from
+> the project when you do want an update.
 
 ## About translation engines
 

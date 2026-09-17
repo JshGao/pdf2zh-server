@@ -2,9 +2,14 @@
 
 [English](README.en.md) | 中文
 
-一个只有状态栏图标、不占程序坞的轻量启动器：双击即把
-[PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next)（`pdf2zh_next`）
-的 WebUI 跑在后台，省掉每次手敲 `pdf2zh_next --gui`。
+一个只有状态栏图标、不占程序坞的轻量启动器，同时托管**两个互不相同的服务**：
+
+| 服务 | 用途 | 端口 |
+|---|---|---|
+| [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next)（`pdf2zh_next --gui`） | 你在浏览器里用的翻译界面 | 7860 |
+| [zotero-pdf2zh](https://github.com/guaguastandup/zotero-pdf2zh) 的 `server.py` | Zotero PDF2zh 插件调用的 HTTP API | 8890 |
+
+省掉每次手敲命令，也省掉"插件该填哪个端口"的困惑——菜单里直接显示两行状态。
 
 <img src="assets/icon-preview.png" width="112" alt="PDF2ZH Web 图标">
 
@@ -16,6 +21,7 @@
 - macOS 11+（已在 macOS 26.7 / Apple Silicon 上验证）
 - 构建：`swiftc`（Xcode，或 `xcode-select --install`）
 - 运行：本机已安装 `pdf2zh_next`（已在 2.9.0 上验证）
+- 可选的 Zotero 支持：本机已安装 zotero-pdf2zh 的 `server.py`（装在 `~/zotero-pdf2zh/` 即会被自动识别）
 
 > 本 App 只是启动器，**不包含也不会自动安装** `pdf2zh_next`。没装的话状态行会写明，并弹窗给出安装命令。
 > 上游官方推荐的安装方式（先装 [uv](https://docs.astral.sh/uv/)）：
@@ -56,17 +62,24 @@ Finder 里看到的 App 图标是液态玻璃风格的圆角底板（渐变 + �
 
 | 菜单项 | 说明 |
 |---|---|
-| `PDF2ZH Web：运行中（端口 7860）` | 状态行（禁用）：启动中…（端口 N）/ 运行中（端口 N）/ 已停止 / 异常原因 / 未找到 pdf2zh_next |
+| `PDF2ZH Web：运行中（端口 7860）` | WebUI 状态行（禁用）：启动中…/ 运行中 / 已停止 / 异常原因 |
+| `Zotero 服务：运行中（端口 8890）` | Zotero 服务状态行（禁用）；未安装时提示点击查看获取方式 |
 | 在浏览器中打开 ⌘O | 打开 `http://127.0.0.1:<端口>/`，仅"运行中"可用 |
-| 复制服务地址 | 把同一个地址写入剪贴板，仅"运行中"可用 |
+| 复制服务地址 | 复制 WebUI 地址，仅"运行中"可用 |
+| 复制 Zotero 插件地址 | 复制 `http://127.0.0.1:8890`，粘到 Zotero 插件的"Python Server IP"即可 |
 | 打开输出文件夹 | 打开 `outputDirectory`，不存在则先创建再打开 |
-| 打开日志 | 打开 `~/Library/Logs/pdf2zh-web.log`，还没有日志时给提示 |
+| 打开 WebUI 日志 / 打开 Zotero 服务日志 | 分别打开两个服务的日志 |
 | 重新检查 pdf2zh_next | 重新探测可执行文件；没装就弹安装引导 |
-| 重启 PDF2ZH Web ⌘R | 停掉当前服务再重新拉起（改完 `config.json` 用它生效） |
+| 重启 WebUI ⌘R | 停掉当前服务再重新拉起（改完 `config.json` 用它生效） |
+| 重启 Zotero 服务 | 同上；未安装时给出获取方式 |
 | `pdf2zh_next：2.9.0` | 版本行；点击查看运行环境（版本、可执行文件、工作目录、端口、日志、配置路径） |
-| 退出并停止 PDF2ZH Web ⌘Q | 退出 App，同时终止服务及其全部子进程 |
+| 退出并停止全部服务 ⌘Q | 退出 App，同时终止两个服务及其全部子进程 |
 
-默认地址：<http://127.0.0.1:7860/>
+默认地址：WebUI <http://127.0.0.1:7860/>、Zotero API <http://127.0.0.1:8890>
+
+> **Zotero 插件该填哪个？** 填 `http://127.0.0.1:8890`——那是 `server.py` 的 HTTP API，不是
+> 7860 的 Gradio 界面。两者是**不同项目、不同协议**，插件指向 7860 会报"这个地址上不是
+> PDF2zh Server"。菜单里的"复制 Zotero 插件地址"就是给你直接粘的。
 
 > **没有 token，但服务默认监听 `0.0.0.0`，同局域网可访问。** 这一点与参考项目 DSH Web 正好相反：
 > DSH 有进程级 token 保护，而 pdf2zh_next 的 Gradio 界面默认既没有 token 也没有认证，所以裸地址
@@ -116,6 +129,11 @@ Finder 里看到的 App 图标是液态玻璃风格的圆角底板（渐变 + �
 | `logMaxBytes` | — | `5242880` | 超过则在下次启动时轮转为 `.log.1` |
 | `startupTimeoutSeconds` | — | `60` | 等端口就绪的超时秒数 |
 | `autoOpenBrowser` | `PDF2ZH_AUTO_OPEN` | `false` | true 时端口就绪后由 App 打开浏览器 |
+| `zoteroServerPath` | `PDF2ZH_ZOTERO_SERVER` | 自动探测 | `server.py` 路径；探测不到则不托管 Zotero 服务 |
+| `zoteroPythonPath` | `PDF2ZH_ZOTERO_PYTHON` | 同目录 `.venv/bin/python` | 运行 server.py 的解释器 |
+| `zoteroPort` | `PDF2ZH_ZOTERO_PORT` | `8890` | Zotero 插件填的端口 |
+| `zoteroLogPath` | `PDF2ZH_ZOTERO_LOG` | `~/Library/Logs/pdf2zh-zotero.log` | Zotero 服务日志 |
+| `zoteroAutoStart` | `PDF2ZH_ZOTERO_AUTOSTART` | `true` | false 时只启动 WebUI |
 
 示例：
 
@@ -139,6 +157,37 @@ Finder 里看到的 App 图标是液态玻璃风格的圆角底板（渐变 + �
 其他任何值都视为 false。
 
 ---
+
+## Zotero 插件支持（可选）
+
+Zotero 的 PDF2zh 插件**不调用** `pdf2zh_next` 的 Gradio 界面，而是调用另一个项目
+[zotero-pdf2zh](https://github.com/guaguastandup/zotero-pdf2zh) 的 `server.py`。
+本 App 会自动探测并托管它——装在 `~/zotero-pdf2zh/` 即被识别，菜单里会多出一行状态。
+
+装它只需三步（只需一次）：
+
+```bash
+# 1. 下载并解压到 ~/zotero-pdf2zh
+curl -L https://github.com/guaguastandup/zotero-pdf2zh/releases/latest/download/server.zip -o /tmp/server.zip
+mkdir -p ~/zotero-pdf2zh && ditto -x -k /tmp/server.zip ~/zotero-pdf2zh/
+
+# 2. 建 venv 并装 server 自身依赖（Flask 等）
+cd ~/zotero-pdf2zh
+~/.local/share/uv/python/cpython-3.12-macos-aarch64-none/bin/python3.12 -m venv .venv
+./.venv/bin/pip install -r server/requirements.txt
+
+# 3. 让目录可写，然后从菜单重启 Zotero 服务
+chmod -R u+w server/config server/translated
+```
+
+然后在 Zotero 里把「工具 → PDF2zh 首选项 → Python Server IP」填成 `http://127.0.0.1:8890`
+（或用菜单里的"复制 Zotero 插件地址"）。
+
+> 首次用插件翻译时，`server.py` 会自行创建 pdf2zh_next 翻译环境，需要几分钟。之后启动就很快了。
+>
+> 本 App 用 `printf 'y\nn\n'` 喂给 `server.py` 的启动提问——第一个 `y` 是"忽略检查继续启动"，
+> 第二个 `n` 是"不自动更新翻译环境"。**已配好的环境不会被静默重装**；想更新时按上游文档跑
+> `python update_packages.py`。
 
 ## 关于翻译引擎
 
