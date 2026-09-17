@@ -362,11 +362,12 @@ pdf2zh-server/
   [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next). It does not
   modify upstream sources; it only calls its CLI (`pdf2zh_next --gui`).
 - Concept and engineering layout follow [DSH-desktop-server](https://github.com/JshGao/DSH-desktop-server) (MIT).
-- The icons are original to this project: an ∞ mark rendered directly by `scripts/make-icons.swift`
-  with CoreGraphics/CoreText (a stroked infinity symbol; a rounded gradient tile for the app icon).
-  They contain **no** artwork from
-  upstream PDFMathTranslate.
+- The icons are original to this project: `assets/download.svg` is the author's hand-drawn
+  **interlocking-loops** mark (not an ∞ glyph), transcribed to vector paths by `scripts/make-icons.swift`
+  (app icon + status template) and by `main.swift` (the coloured progress variant).
+  They contain **no** artwork from upstream PDFMathTranslate.
 - The code in this project is released under the [MIT](LICENSE) licence.
+- Repository: <https://github.com/JshGao/pdf2zh-server>
 
 ---
 

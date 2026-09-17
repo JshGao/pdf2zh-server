@@ -16,6 +16,8 @@
 概念与工程结构参考 [DSH-desktop-server](https://github.com/JshGao/DSH-desktop-server)。实现规格见
 `VIBE_CODING.md`，源码是单文件 `main.swift`。
 
+仓库：<https://github.com/JshGao/pdf2zh-server>
+
 **环境要求**
 
 - macOS 11+（已在 macOS 26.7 / Apple Silicon 上验证）
@@ -51,7 +53,7 @@ PDF2ZH_REGEN_ICONS=1 ./build.sh   # 改了 scripts/make-icons.swift 后重新渲
 构建只需要 `swiftc`，不需要 Xcode 工程；模块缓存固定写在 `build/.swift-module-cache`，所以构建是自包含的，
 沙箱和 CI 里都能跑。图标产物已提交在 `assets/`，是构建时的真源，正常构建不会再渲染一次。
 
-也可以直接下载 Releases 里现成的产物：`PDF2ZH Web-<版本>.dmg`（内含 App 和指向 `/Applications` 的快捷方式）
+也可以直接下载 [Releases](https://github.com/JshGao/pdf2zh-server/releases) 里现成的产物：`PDF2ZH Web-<版本>.dmg`（内含 App 和指向 `/Applications` 的快捷方式）
 或 `PDF2ZH Web-<版本>.zip`。推一个 `v*` 标签，CI 会在 macOS runner 上构建、验收并打包发布。
 
 启动后右上角状态栏出现**两个互锁的环**（作者手绘的矢量标识）：这是一张黑字 + 透明底的模板图，
@@ -337,9 +339,11 @@ pdf2zh-server/
 - 本项目是 [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next) 的
   **非官方**启动器，不修改上游源码，只调用其 CLI（`pdf2zh_next --gui`）。
 - 概念与工程结构参考 [DSH-desktop-server](https://github.com/JshGao/DSH-desktop-server)（MIT）。
-- 图标为本项目原创：`scripts/make-icons.swift` 用 CoreGraphics/CoreText 直接渲染的 ∞ 标识
-  （描边无限符号 / 圆角渐变底板），**不含**上游 PDFMathTranslate 的任何美术资源。
+- 图标为本项目原创：`assets/download.svg` 是作者手绘的**互锁环**矢量稿（非 ∞ 符号），
+  `scripts/make-icons.swift` 与 `main.swift` 各自把它转成矢量路径——前者渲染 App 图标与
+  状态栏模板图，后者渲染带进度的彩色版本。**不含**上游 PDFMathTranslate 的任何美术资源。
 - 本项目的代码以 [MIT](LICENSE) 许可发布。
+- 项目地址：<https://github.com/JshGao/pdf2zh-server>
 
 ---
 
