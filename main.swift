@@ -64,6 +64,8 @@ private struct SpawnFailure: LocalizedError {
 struct AppConfig {
     /// Absolute path to the pdf2zh_next executable, or "" when not installed.
     var pdf2zhPath: String
+    /// The directory the services run in. Made mutable so that a failure to create the
+    /// configured one can fall back to a temporary directory instead of failing to start.
     var workingDirectory: String
     var webPort: Int
     var extraArguments: [String]
@@ -432,7 +434,11 @@ final class ManagedService {
         let label = spec.name
 
         return """
-        cd \(workingDirectory) || { print -r -- "\(label): cannot cd to" \(workingDirectory); exit 1; }
+        cd \(workingDirectory) || {
+          print -r -- "\(label): cannot cd to" \(workingDirectory)
+          print -r -- "\(label): 该目录不存在或不可进入；它本该由 App 在启动时创建。"
+          exit 1
+        }
 
         pgid=$$
         wrapper=\(wrapperPid)
@@ -1326,7 +1332,9 @@ enum ProgressIcon {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    private let config = AppConfig.load()
+    /// Mutable so a directory that cannot be created can fall back to a temporary location
+    /// (see ensureDirectories). Everything else about the configuration stays load-once.
+    private var config = AppConfig.load()
 
     /// The Gradio WebUI a human drives in a browser.
     private var webService: ManagedService!
@@ -1419,6 +1427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        ensureDirectories()
         queryVersion()
         writeConfigTemplateIfNeeded()
         startProgressTracking()
@@ -1623,6 +1632,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var progressSummary: String? { progressTracker?.summary }
+
+    /// Create the directories both services need, falling back to a temporary location if the
+    /// configured one cannot be made.
+    ///
+    /// This was silently lost during the two-service refactor, and the consequence was obscure:
+    /// `AppConfig` used to create the directory as a side effect of loading, so nothing noticed
+    /// until CI, where `~/PDF2ZH Workspace` did not exist and the supervisor's `cd` failed with
+    /// "no such file or directory". The app reported only "port never opened".
+    ///
+    /// `try?` alone is not enough here — the failure has to be visible, and the service still has
+    /// to run, so the fallback is real rather than a message.
+    private func ensureDirectories() {
+        let manager = FileManager.default
+        var notes: [String] = []
+
+        func ensure(_ path: String, fallback: String) -> String {
+            do {
+                try manager.createDirectory(atPath: path, withIntermediateDirectories: true)
+                return path
+            } catch {
+                notes.append("\(path)：\(error.localizedDescription)")
+                do {
+                    try manager.createDirectory(atPath: fallback, withIntermediateDirectories: true)
+                    notes.append("已回退到 \(fallback)")
+                    return fallback
+                } catch {
+                    notes.append("回退目录也不可用：\(error.localizedDescription)")
+                    return path
+                }
+            }
+        }
+
+        let temporary = NSTemporaryDirectory() + "PDF2ZHWeb"
+        config.workingDirectory = ensure(
+            config.workingDirectory, fallback: temporary + "/workspace"
+        )
+        config.outputDirectory = ensure(
+            config.outputDirectory, fallback: temporary + "/output"
+        )
+        try? manager.createDirectory(atPath: config.stateDirectory, withIntermediateDirectories: true)
+
+        if !notes.isEmpty {
+            appendDiagnostic("目录准备有问题：" + notes.joined(separator: "；"))
+        }
+    }
 
     // MARK: Update actions
 
