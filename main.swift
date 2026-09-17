@@ -913,40 +913,52 @@ final class ProgressTracker {
     private let interval: TimeInterval
     private var timer: Timer?
     private var inFlight = false
+    private let logReader: ActivityLogReader
 
-    /// Aggregate 0...1, or nil when nothing is running.
-    private(set) var fraction: Double?
-    /// How many tasks the current figure covers.
-    private(set) var taskCount: Int = 0
+    /// The most recent step seen in the service log; nil when nothing is running.
+    private(set) var activity: TranslationActivity?
+    /// Tasks reported by `/api/tasks`; used as a cross-check and for the task count.
+    private(set) var taskCount = 0
+    /// A percentage from `/api/tasks`, when the server happens to provide a usable one.
+    private(set) var reportedPercent: Int?
     /// Set briefly when work finishes, so the icon can show a completed state.
     private var completedAt: Date?
-    /// True once any task has actually been observed; distinguishes "idle so far" (keep
+    /// True once any work has actually been observed; distinguishes "idle so far" (keep
     /// polling — work may start at any time) from "finished" (stop after the banner).
     private var hasSeenTasks = false
 
-    /// Called on the main queue when the reported progress changes.
+    /// Called on the main queue when the reported state changes.
     var onChange: (() -> Void)?
-    /// Optional sink for a short diagnostic line whenever the reported progress changes.
-    /// Without this, a user reporting "the icon never turns green" cannot be told apart from
-    /// "nothing was translating yet", because the app otherwise keeps no record of what it saw.
+    /// Optional sink for a short diagnostic line whenever the state changes.
     var onDiagnostic: ((String) -> Void)?
 
-    init(port: Int, interval: TimeInterval) {
+    init(port: Int, interval: TimeInterval, logPath: String) {
         self.port = port
         self.interval = max(1, interval)
+        self.logReader = ActivityLogReader(path: logPath)
     }
 
-    var isTranslating: Bool { fraction != nil }
-
-    /// True for a couple of seconds after the last task finished: the menu shows a
-    /// "completed" note and the icon stays green, then everything returns to normal.
+    /// True for a couple of seconds after the last task finished.
     var justCompleted: Bool {
         guard let completedAt else { return false }
         return Date().timeIntervalSince(completedAt) < 4
     }
 
+    /// Short line for the menu.
+    var summary: String? {
+        if let activity {
+            if let percent = reportedPercent, percent > 0 {
+                return "翻译中：\(percent)%（\(activity.summary)）"
+            }
+            return "翻译中：\(activity.summary)"
+        }
+        if justCompleted { return "翻译完成" }
+        return nil
+    }
+
     func start() {
         guard timer == nil else { return }
+        logReader.seekToEnd()
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.poll() }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
@@ -965,82 +977,245 @@ final class ProgressTracker {
         guard !inFlight else { return }
 
         // Once a run has been *seen* and then finished, keep polling until the completion
-        // banner expires — the icon holds full green during that window and needs one more
-        // tick to return to normal — and only then stop.
-        //
-        // The guard must key on `hasSeenTasks`, not on `fraction == nil`: at launch nothing
-        // has been observed yet, so a nil fraction means "idle so far", not "finished".
-        // Testing `fraction == nil` alone stopped the tracker on its first tick, which is why
-        // a translation started later never showed up in the menu bar.
-        if timer != nil, hasSeenTasks, !justCompleted {
+        // banner expires — then stop. Keying on `hasSeenTasks` rather than on "nothing is
+        // running right now" matters: at launch nothing has been observed yet, and treating
+        // that as "finished" stopped the tracker on its first tick.
+        if timer != nil, hasSeenTasks, !justCompleted, activity == nil {
             stop()
             return
         }
 
         inFlight = true
-
         let url = URL(string: "http://127.0.0.1:\(port)/api/tasks")!
         var request = URLRequest(url: url)
         request.timeoutInterval = 4
 
         URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
-            // A refused connection is the normal case whenever the service is not running;
-            // treat any failure as "no tasks" rather than as an error to report.
-            var percentages: [Double] = []
+            // A refused connection is the normal case when the service is not running; treat
+            // any failure as "no tasks" rather than as an error to report.
+            var taskCount = 0
+            var percent: Int?
             if let data,
                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let tasks = object["tasks"] as? [[String: Any]] {
-                for task in tasks {
-                    if let progress = task["progress"] as? Double {
-                        percentages.append(progress)
-                    } else if let progress = task["progress"] as? Int {
-                        percentages.append(Double(progress))
-                    }
+                taskCount = tasks.count
+                let values = tasks.compactMap { task -> Double? in
+                    if let value = task["progress"] as? Double { return value }
+                    if let value = task["progress"] as? Int { return Double(value) }
+                    return nil
+                }
+                if !values.isEmpty {
+                    percent = Int((values.reduce(0, +) / Double(values.count)).rounded())
                 }
             }
 
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.inFlight = false
-                self.apply(percentages: percentages)
+                self.apply(taskCount: taskCount, percent: percent)
             }
         }.resume()
     }
 
-    private func apply(percentages: [Double]) {
-        let previous = fraction
+    private func apply(taskCount newCount: Int, percent: Int?) {
+        let previousActivity = activity
         let previousCount = taskCount
 
-        if percentages.isEmpty {
-            if previous != nil { completedAt = Date() }
-            fraction = nil
-            taskCount = 0
-        } else if justCompleted, let held = fraction {
-            // Tasks reappeared within the completion window: the batch is still going, so
-            // keep the completed banner off and resume live progress from here.
-            completedAt = nil
-            fraction = min(1.0, max(0.0, percentages.reduce(0, +) / Double(percentages.count) / 100.0))
-            taskCount = percentages.count
+        taskCount = newCount
+        // A percentage from the server only counts if it is actually moving; the field is
+        // pinned at 0 against pdf2zh_next, which is the whole reason the log is consulted.
+        reportedPercent = (percent ?? 0) > 0 ? percent : nil
+
+        if newCount > 0 {
             hasSeenTasks = true
-            _ = held
+            activity = logReader.latest() ?? previousActivity ?? TranslationActivity(
+                phase: "翻译中", count: nil, total: nil
+            )
         } else {
-            fraction = min(1.0, max(0.0, percentages.reduce(0, +) / Double(percentages.count) / 100.0))
-            taskCount = percentages.count
-            hasSeenTasks = true
+            if hasSeenTasks { completedAt = Date() }
+            activity = nil
+            reportedPercent = nil
         }
 
-        if fraction != previous || taskCount != previousCount {
-            if let fraction {
-                let percent = Int((fraction * 100).rounded())
-                onDiagnostic?("进度 \(percent)%（\(taskCount) 个任务）")
+        let changed = activity?.summary != previousActivity?.summary || taskCount != previousCount
+        if changed {
+            if let activity {
+                onDiagnostic?("进行中：\(activity.summary)（\(taskCount) 个任务）")
             } else {
                 onDiagnostic?("翻译任务结束")
             }
             onChange?()
-        } else if previous == nil, justCompleted {
-            // Keep refreshing while the "completed" note is on screen so it expires.
-            onChange?()
+        } else if activity == nil, justCompleted {
+            onChange?()   // keep refreshing while the "completed" note is on screen
         }
+    }
+}
+
+// MARK: - Translation activity
+
+/// A translation step observed in the service log, e.g. `Translate Paragraphs (1/1) ━━━ 373/…`.
+struct TranslationActivity {
+    /// Human-readable phase, e.g. "Translate Paragraphs".
+    let phase: String
+    /// Items processed so far in this phase, if the log showed a counter.
+    let count: Int?
+    /// Total for this phase — almost always nil, see below.
+    let total: Int?
+
+    var summary: String {
+        if let count {
+            return total == nil ? "\(phase)：已处理 \(count)" : "\(phase)：\(count)/\(total!)"
+        }
+        return phase
+    }
+}
+
+/// Tails the service log and reports the most recent translation step.
+///
+/// **Why the log and not `/api/tasks`:** that endpoint reports a `progress` percentage, but it is
+/// always 0 against pdf2zh_next. The server parses the child's output with
+/// `translate\s+[^a-z()\r\n]*?(\d+)/(\d+)`, which cannot match what pdf2zh_next actually prints —
+/// `Translate Paragraphs (1/1)  ━━━━━ 373/…` — because the phase name and its own `(1/1)` sit
+/// between the words and the numbers.
+///
+/// Worse, the denominator is unusable even with a corrected pattern: tqdm truncates it to `…` in
+/// the narrow log width. Verified against a real run — `Translate Paragraphs` refreshed twice in
+/// the whole translation, both times as `373/…` and `167/…`. **A true percentage therefore cannot
+/// be computed from any available source**, which is why this type reports *activity* (which phase,
+/// how many items) rather than a percentage, and the icon shows "working" instead of a fraction.
+final class ActivityLogReader {
+    private let path: String
+    private var offset: UInt64 = 0
+    private var buffer: [UInt8] = []
+
+    /// Matches a tqdm bar: `━… 373/…`, optional leading `Phase (1/1)`.
+    private static let barPattern = try? NSRegularExpression(
+        pattern: "(?:([A-Za-z][A-Za-z ]{2,30})\\s*\\(\\d+/\\d+\\))?[^A-Za-z0-9\\r\\n]*?(\\d+)/(\\d+|…)"
+    )
+
+    init(path: String) {
+        self.path = path
+    }
+
+    /// Start reading from the current end of the file: existing content is history, not activity.
+    func seekToEnd() {
+        offset = LogFile.size(atPath: path)
+        buffer.removeAll(keepingCapacity: true)
+    }
+
+    /// Read whatever was appended since the last call and return the newest activity, if any.
+    func latest() -> TranslationActivity? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+
+        let size = (try? handle.seekToEnd()) ?? 0
+        // A rotation (log grew past its cap and was replaced) invalidates the offset.
+        guard size >= offset else {
+            seekToEnd()
+            return nil
+        }
+        guard size > offset else { return nil }
+
+        try? handle.seek(toOffset: offset)
+        let data = handle.readData(ofLength: 65_536)
+        offset += UInt64(data.count)
+        buffer.append(contentsOf: data)
+        if buffer.count > 131_072 {
+            buffer.removeFirst(buffer.count - 65_536)
+        }
+
+        guard let text = String(bytes: buffer, encoding: .utf8) else { return nil }
+        return Self.latestActivity(in: text)
+    }
+
+    /// tqdm redraws with `\r`, so split on both and take the last line that parses.
+    static func latestActivity(in text: String) -> TranslationActivity? {
+        let stripped = stripANSI(text)
+        let lines = stripped.split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+        for line in lines.reversed() {
+            guard line.contains("━") else { continue }
+            guard let activity = parseBar(String(line)) else { continue }
+            return activity
+        }
+        return nil
+    }
+
+    static func parseBar(_ line: String) -> TranslationActivity? {
+        // A bar glyph is required, and this is load-bearing rather than cosmetic: without it the
+        // log's own timestamps match. `[09/17/26 22:55:44] INFO ...` contains "09/17", which the
+        // generic pattern happily reads as "9 of 17" — a phantom task reported on every idle
+        // poll. Any progress line drawn by tqdm has a bar; a log header never does.
+        guard line.contains("━") || line.contains("═") else { return nil }
+
+        // The main `translate` bar is the one row that usually carries a real denominator:
+        // measured over a full run its field was 0…100 with "100" present 152 times and "…"
+        // only 44, so `已处理 N/100` is honest. It is still not a smooth percentage — the
+        // value sits at 0 through the parallel batches and jumps at the end — so the caller
+        // shows the count, not a fraction of work done.
+        if let main = parseMainTranslateBar(line) { return main }
+
+        guard let regex = barPattern else { return nil }
+        let ns = line as NSString
+        guard let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
+              match.numberOfRanges >= 5 else { return nil }
+
+        // Every group except the count is optional, so each range must be checked against
+        // NSNotFound before being used: an unparticipated group reports that as its location,
+        // and substring(with:) raises on it.
+        func text(at index: Int) -> String? {
+            guard index < match.numberOfRanges else { return nil }
+            let range = match.range(at: index)
+            guard range.location != NSNotFound, range.length > 0 else { return nil }
+            return ns.substring(with: range)
+        }
+
+        guard let countText = text(at: 3), let count = Int(countText) else { return nil }
+        let phase = text(at: 1)?.trimmingCharacters(in: .whitespaces) ?? "翻译中"
+        let denominator = text(at: 4)
+        return TranslationActivity(phase: phase, count: count, total: denominator.flatMap(Int.init))
+    }
+
+    /// `translate ━━━━━━━ 0/100 0:00:00 -:--:--` — the main progress bar, and the only row
+    /// whose denominator is usually a real number (measured: "100" 152 times, "…" 44).
+    ///
+    /// Parsed by splitting rather than by regex: the bar is drawn with U+2501 characters and the
+    /// counter sits after them, and a pattern that has to describe "anything that is not a digit
+    /// but also not a newline, except the newline is fine in a class" is easy to get subtly wrong
+    /// across the Python-to-Swift string escaping boundary. Splitting is explicit and testable.
+    private static func parseMainTranslateBar(_ line: String) -> TranslationActivity? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.lowercased().hasPrefix("translate") else { return nil }
+        guard let barIndex = trimmed.firstIndex(of: "━") else { return nil }
+
+        // `Translate Paragraphs (1/1) ━━━ 373/…` is the *phase* bar, not the main one; require
+        // that nothing but spaces and bar glyphs sits between the word and the bar. Without
+        // this the two are indistinguishable by prefix alone, and the phase counter (whose
+        // denominator is always truncated) would shadow the main one (whose usually is not).
+        // Anything alphanumeric between the word and the bar means this is a phase bar
+        // (`Translate Paragraphs (1/1) ━━━`), not the main one. Allowing *any* non-alphanumeric
+        // glyph matters: tqdm decorates the bar with its own marker, e.g. `translate ╸━━━━ 10/…`,
+        // and an explicit allow-list that missed U+2578 silently demoted those rows to the
+        // generic path, where their phase name came out empty.
+        let between = trimmed[trimmed.index(trimmed.startIndex, offsetBy: "translate".count)..<barIndex]
+        guard between.allSatisfy({ !$0.isLetter && !$0.isNumber }) else { return nil }
+
+        // The counter is the first token after the bar that looks like "N/M" or "N/…".
+        let afterBar = trimmed[barIndex...]
+        for token in afterBar.split(whereSeparator: { $0 == " " || $0 == "\t" }) {
+            let parts = token.split(separator: "/", maxSplits: 1)
+            guard parts.count == 2, let count = Int(parts[0]) else { continue }
+            let denominator = String(parts[1])
+            return TranslationActivity(phase: "翻译", count: count, total: Int(denominator))
+        }
+        return nil
+    }
+
+    static func stripANSI(_ text: String) -> String {
+        text.replacingOccurrences(
+            of: "\\x1B\\[[0-9;?]*[A-Za-z]",
+            with: "",
+            options: .regularExpression
+        )
     }
 }
 
@@ -1095,7 +1270,7 @@ enum ProgressIcon {
 
     /// Draw the mark at `size`, with the leftmost `fraction` of its width in `progressColor`
     /// and the remainder in `restColor`.
-    static func image(size: NSSize, fraction: Double, restColor: NSColor) -> NSImage {
+    static func image(size: NSSize, fraction: Double, restColor: NSColor, alpha: Double = 1.0) -> NSImage {
         let width = max(1, Int((size.width * 2).rounded()))
         let height = max(1, Int((size.height * 2).rounded()))
 
@@ -1133,7 +1308,9 @@ enum ProgressIcon {
             context.saveGState()
             context.clip(to: CGRect(x: 0, y: 0, width: canvasW * CGFloat(clamped), height: canvasH))
             context.addPath(fitted)
-            context.setFillColor(NSColor.systemGreen.cgColor)
+            // Alpha is how the "working" pulse is expressed; the mark itself stays whole
+            // because a partial fill would imply a position we cannot actually know.
+            context.setFillColor(NSColor.systemGreen.withAlphaComponent(CGFloat(alpha)).cgColor)
             context.fillPath()
             context.restoreGState()
         }
@@ -1169,6 +1346,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var progressTracker: ProgressTracker?
     private var updateCheckTimer: Timer?
     private var appearanceObservation: NSKeyValueObservation?
+    /// Drives the working pulse while a translation is running; nil when idle.
+    private var pulseTimer: Timer?
     private var availableUpdates: [AvailableUpdate] = []
     /// The template (adaptive) icon, kept so it can be restored after a progress run.
     private var templateIcon: NSImage?
@@ -1276,6 +1455,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        pulseTimer?.invalidate()
+        progressTracker?.stop()
         webService?.stop()
         zoteroService?.stop()
         releaseSingleInstanceLock()
@@ -1334,7 +1515,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Progress and updates
 
     private func startProgressTracking() {
-        let tracker = ProgressTracker(port: config.zoteroPort, interval: config.zoteroProgressPollSeconds)
+        // The log is the only source of live translation activity (see ActivityLogReader), so
+        // progress tracking is inherently tied to the Zotero service being installed.
+        let tracker = ProgressTracker(
+            port: config.zoteroPort,
+            interval: config.zoteroProgressPollSeconds,
+            logPath: config.zoteroLogPath
+        )
         tracker.onChange = { [weak self] in self?.updateMenu() }
         tracker.onDiagnostic = { [weak self] message in
             self?.appendDiagnostic(message)
@@ -1383,19 +1570,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusIcon() {
         guard let button = statusItem?.button else { return }
 
-        // While the completion banner is up, hold the icon at full green so "finished" is
-        // visible before the mark returns to its normal colour.
-        let fraction: Double?
-        if let live = progressTracker?.fraction {
-            fraction = live
-        } else if progressTracker?.justCompleted == true {
-            fraction = 1.0
-        } else {
-            fraction = nil
-        }
+        let activity = progressTracker?.activity
+        let completing = progressTracker?.justCompleted == true
 
         // Resting state: the template image, which macOS tints for light/dark menu bars.
-        guard let fraction else {
+        guard activity != nil || completing else {
             let signature = "template"
             guard signature != lastIconSignature else { return }
             lastIconSignature = signature
@@ -1403,12 +1582,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Colour cannot come from a template image, so draw a coloured bitmap instead. The
-        // unfinished remainder is drawn in the colour the template would have been tinted
-        // to, detected from the button's effective appearance.
+        // Colour cannot come from a template image, so a coloured bitmap is drawn instead.
+        // While translating the green pulses, because there is no usable percentage to show:
+        // the log's denominators are truncated to "…", so a smooth fill would be fabricated.
+        // A pulse states "working" without claiming a position. Once finished it holds steady.
         let isDark = button.effectiveAppearance
             .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let signature = String(format: "%.3f-%@", fraction, isDark ? "dark" : "light")
+        let pulse = completing ? 1.0 : Self.pulseFactor()
+        let signature = String(format: "%@-%@-%.2f", activity == nil ? "done" : "busy",
+                               isDark ? "dark" : "light", pulse)
         guard signature != lastIconSignature else { return }
         lastIconSignature = signature
 
@@ -1416,21 +1598,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let rest: NSColor = isDark
             ? NSColor(calibratedWhite: 1.0, alpha: 0.92)
             : NSColor(calibratedWhite: 0.0, alpha: 0.92)
-        button.image = ProgressIcon.image(size: size, fraction: fraction, restColor: rest)
+        button.image = ProgressIcon.image(size: size, fraction: 1.0, restColor: rest, alpha: pulse)
     }
 
-    private func progressSummary() -> String? {
-        guard let tracker = progressTracker else { return nil }
-        if let fraction = tracker.fraction {
-            let percent = Int((fraction * 100).rounded())
-            let tasks = tracker.taskCount
-            return tasks > 1
-                ? "翻译中：\(percent)%（\(tasks) 个任务）"
-                : "翻译中：\(percent)%"
+    /// Start or stop the pulse redraw to match the current state.
+    private func syncPulseTimer() {
+        let shouldPulse = progressTracker?.activity != nil
+        if shouldPulse, pulseTimer == nil {
+            let timer = Timer(timeInterval: 0.12, repeats: true) { [weak self] _ in
+                self?.updateStatusIcon()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            pulseTimer = timer
+        } else if !shouldPulse {
+            pulseTimer?.invalidate()
+            pulseTimer = nil
         }
-        if tracker.justCompleted { return "翻译完成" }
-        return nil
     }
+
+    /// 0.35…1.0 over a ~1.6s cycle: slow enough to read as breathing, not as a blink.
+    private static func pulseFactor() -> Double {
+        let phase = Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
+        return 0.35 + 0.65 * (0.5 - 0.5 * cos(phase * 2 * .pi))
+    }
+
+    private var progressSummary: String? { progressTracker?.summary }
 
     // MARK: Update actions
 
@@ -1601,10 +1793,11 @@ _ title: String, action: Selector?, key: String = "") -> NSMenuItem {
         openItem.isEnabled = webUsable
         copyItem.isEnabled = webUsable
 
+        syncPulseTimer()
         updateStatusIcon()
 
         if let progressItem {
-            if let summary = progressSummary() {
+            if let summary = progressSummary {
                 progressItem.title = summary
                 progressItem.isHidden = false
             } else {

@@ -212,18 +212,31 @@ save in the GUI).
 
 ---
 
-## Translation progress
+## Translation activity
 
-While a translation runs, **the menu bar icon fills left to right in green** — the green share is
-the overall progress — and the menu shows `翻译中：45%（2 个任务）`. **With several tasks the
-overall figure is their mean.**
+While a translation runs, **the menu bar icon breathes green** and the menu shows the current phase
+and how much it has processed, e.g. `翻译中：翻译 已处理 37/100` or
+`翻译中：Translate Paragraphs：已处理 373`. When everything finishes the icon holds full green for
+four seconds before returning to normal.
 
-When everything finishes the icon holds full green for four seconds before returning to normal,
-so "done" is actually visible.
+**This is an activity indicator, not a progress bar — deliberately.** A real percentage is not
+available from any current source:
 
-> Progress comes only from the Zotero service (`server.py`'s `/api/tasks`); the Gradio WebUI has
-> no equivalent endpoint. Without the Zotero service installed there is simply no progress line,
-> and nothing else changes.
+- `/api/tasks` has a `progress` field, but against pdf2zh_next it is **always 0**: the server's
+  parser cannot match what pdf2zh_next actually prints (the phase name and its own `(1/1)` sit
+  between the word and the numbers).
+- `/events` streams the same data, so it inherits the problem.
+- Reading the server log directly does yield the real progress lines, but **tqdm truncates the
+  denominator to `…`**.
+- **Measuring the bar's length does not work either**: measured lengths were only 4/5/40, and
+  length 5 covers both 0 and 373 — it carries no ratio at all, because tqdm degrades to a fixed
+  placeholder bar when its output is not a TTY.
+
+So the green pulse says "working", not "how far" — a partial fill would imply a position we do not
+actually know.
+
+> Activity is read from the Zotero service's log. Without that service installed the line simply
+> does not appear, and nothing else changes.
 
 ## Update checking
 
