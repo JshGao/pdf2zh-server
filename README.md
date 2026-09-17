@@ -64,6 +64,7 @@ Finder 里看到的 App 图标是液态玻璃风格的圆角底板（渐变 + �
 |---|---|
 | `PDF2ZH Web：运行中（端口 7860）` | WebUI 状态行（禁用）：启动中…/ 运行中 / 已停止 / 异常原因 |
 | `Zotero 服务：运行中（端口 8890）` | Zotero 服务状态行（禁用）；未安装时提示点击查看获取方式 |
+| `翻译中：45%（2 个任务）` | 仅在有翻译任务时出现；多个任务显示总进度（平均值） |
 | 在浏览器中打开 ⌘O | 打开 `http://127.0.0.1:<端口>/`，仅"运行中"可用 |
 | 复制服务地址 | 复制 WebUI 地址，仅"运行中"可用 |
 | 复制 Zotero 插件地址 | 复制 `http://127.0.0.1:8890`，粘到 Zotero 插件的"Python Server IP"即可 |
@@ -73,6 +74,7 @@ Finder 里看到的 App 图标是液态玻璃风格的圆角底板（渐变 + �
 | 重启 WebUI ⌘R | 停掉当前服务再重新拉起（改完 `config.json` 用它生效） |
 | 重启 Zotero 服务 | 同上；未安装时给出获取方式 |
 | `pdf2zh_next：2.9.0` | 版本行；点击查看运行环境（版本、可执行文件、工作目录、端口、日志、配置路径） |
+| 检查更新 / 有可用更新：… | 自动检查 pdf2zh_next 与 zotero-pdf2zh 的新版本；有更新时列出并给升级指引 |
 | 退出并停止全部服务 ⌘Q | 退出 App，同时终止两个服务及其全部子进程 |
 
 默认地址：WebUI <http://127.0.0.1:7860/>、Zotero API <http://127.0.0.1:8890>
@@ -134,6 +136,8 @@ Finder 里看到的 App 图标是液态玻璃风格的圆角底板（渐变 + �
 | `zoteroPort` | `PDF2ZH_ZOTERO_PORT` | `8890` | Zotero 插件填的端口 |
 | `zoteroLogPath` | `PDF2ZH_ZOTERO_LOG` | `~/Library/Logs/pdf2zh-zotero.log` | Zotero 服务日志 |
 | `zoteroAutoStart` | `PDF2ZH_ZOTERO_AUTOSTART` | `true` | false 时只启动 WebUI |
+| `zoteroProgressPollSeconds` | — | `2` | 轮询 `/api/tasks` 的间隔，用于图标进度 |
+| `checkUpdatesOnLaunch` | `PDF2ZH_CHECK_UPDATES` | `true` | false 时不在启动时检查更新 |
 
 示例：
 
@@ -201,6 +205,30 @@ App 只做一件事：启动时加 `--gui --server-port <端口>` 覆盖端口�
 （回写只发生在你在 GUI 里点保存时）。
 
 ---
+
+## 翻译进度显示
+
+翻译进行中时，**状态栏图标会由左向右变绿**，绿色占比就是总进度；菜单里同时显示
+`翻译中：45%（2 个任务）`。**有多个任务时取各任务进度的平均值**作为总进度。
+
+全部完成后图标保持满绿 4 秒再回到常态，让你看得见"完成了"。
+
+> 进度只来自 Zotero 服务（`server.py` 的 `/api/tasks`）——Gradio WebUI 没有等价的接口。
+> 所以没装 Zotero 服务时不会出现进度行，其他行为完全不受影响。
+
+## 检查更新
+
+启动时以及之后每 24 小时，App 会查一次两个上游有没有新版本；菜单里的"检查更新"可随时手动触发。
+有更新时该项会变成 `有可用更新：pdf2zh_next 2.10.0`，点击给出升级指引。
+
+**只检查与提醒，不会自动升级。** 升级 pdf2zh_next 可能带来新的 BabelDOC 并触发资产重新下载，
+升级 zotero-pdf2zh 会替换你可能已经改过的 server——这两件事都该由你决定：
+
+```bash
+uv tool upgrade pdf2zh-next     # 升级 WebUI（之后点菜单"重启 WebUI"）
+```
+
+zotero-pdf2zh 的 server 是解压目录，按上游 release 替换后点"重启 Zotero 服务"。
 
 ## 工作原理（简述）
 

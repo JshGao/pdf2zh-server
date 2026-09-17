@@ -72,6 +72,8 @@ Gradio 的端口时会报"这个地址上不是 PDF2zh Server"。本 App 因此�
 | FR-15 | 托管 zotero-pdf2zh 的 `server.py`，默认端口 8890，与 WebUI 独立启停 |
 | FR-16 | 状态栏菜单为两个服务各显示一行状态；并提供"复制 Zotero 插件地址" |
 | FR-17 | 未安装 server.py 时如实显示"未安装"，并给出获取方式；不影响 WebUI 运行 |
+| FR-18 | 翻译进行中时，状态栏图标按总进度由左向右变绿；全部完成后回到常态，菜单显示进度百分比与任务数 |
+| FR-19 | 自动检查 pdf2zh_next 与 zotero-pdf2zh 是否有新版本，有则提醒（**只检查与提醒，不自动升级**） |
 
 ### 3.2 非功能需求
 
@@ -153,6 +155,51 @@ printf 'y\nn\n' | <venv>/bin/python <server.py> --port 8890
 配置项见 §7.1；`zoteroAutoStart` 为 false 时可只跑 WebUI（回到单服务行为）。
 
 只有 `running` 状态下"在浏览器中打开"和"复制服务地址"才可用。
+
+### 4.2.2 翻译进度（FR-18）
+
+进度数据只有一个来源：zotero-pdf2zh 的 **`GET /api/tasks`**，它返回活跃任务列表，每个任务带
+`progress`（0–100）与 `status`，由 server 驱动 pdf2zh_next 时更新。**Gradio WebUI 没有等价的
+接口**，所以进度显示只在装了 Zotero 服务时可用；没有它时菜单不会出现进度行，行为与以前一致。
+
+**多个任务时取各任务百分比的算术平均**作为总进度。这些任务是独立、量级相近的翻译作业，
+平均是诚实的汇总，也符合用户问"还剩多少"时的本意。
+
+**图标如何变绿**：常态图标是 *template image*——macOS 自己按菜单栏明暗着色，这正是它能自动
+适配深浅色的原因，但也意味着**模板图永远不可能是绿色**。因此有进度时改用自绘的彩色位图
+（`ProgressIcon`）：同一份矢量（来自 `assets/download.svg`）先整块画成"菜单栏前景色"，
+再把左侧 `fraction` 宽度的区域裁切后画成 `systemGreen`。读起来就是绿色从左向右扫过。
+
+- 未完成部分的颜色由 `button.effectiveAppearance` 判断深浅色决定；系统切换外观时通过
+  KVO 监听 `NSApp.effectiveAppearance` 重新绘制。
+- 完成瞬间任务会从 `/api/tasks` 消失，拿不到 100%。因此**进入"完成"状态时图标保持满绿 4 秒**
+  （`justCompleted`），再回到常态模板图标——这样"全部完成"是可见的，而不是直接跳回。
+- 该窗口内继续轮询，避免图标卡在满绿；窗口结束才停表。
+- 只在图标依赖的东西真正变化时重绘（`lastIconSignature` 比较），因为绘制的开销远大于比较。
+
+### 4.2.3 更新检查（FR-19）
+
+**只检查，不下载、不安装。** 升级 pdf2zh_next 可能带来新的 BabelDOC 并触发资产重新下载；
+升级 zotero-pdf2zh 会替换用户可能已改过的 server——两者都应当由用户显式决定，App 只负责
+把"有更新"这件事说出来。
+
+数据源用各自项目自己文档里的那个：
+
+| 项目 | 来源 | 说明 |
+|---|---|---|
+| pdf2zh_next | PyPI JSON API `pypi.org/pypi/pdf2zh-next/json` | 它就是 `uv tool install` 装的包；`releases` 的键即版本，跳过含 `-` 的预发布 |
+| zotero-pdf2zh | GitHub `releases/latest` 的 `tag_name` | 上游文档把用户指向 releases |
+
+**版本比较必须逐段按数字比**，不能比字符串——`"2.10.0" < "2.9.0"` 在字符串序里成立，而它恰好会
+把新版本误判成旧版本、让提醒永远不出现。`UpdateChecker.compareVersions` 按 `.` 切分转 Int 比较。
+
+已安装版本从磁盘读，不启动解释器：pdf2zh_next 读 `pdf2zh_next/__init__.py` 的 `__version__`
+（**用精确路径候选，不枚举 site-packages**——深度优先会先扫过数千个无关包，任何遍历预算要么
+在命中前截断要么耗时数百毫秒）；zotero-pdf2zh 读 `server.py` 的 `__version__`，并以文件头的
+`## server.py vX.Y.Z` 注释作兜底。
+
+启动时检查一次，之后每 24 小时一次；菜单项"检查更新"手动触发。有更新时该项标题列出
+`名称 当前 → 最新`，点击弹出升级指引（含 `uv tool upgrade pdf2zh-next` 与 release 地址）。
 
 ### 4.3 就绪判定（与参考项目的关键差异）
 
@@ -293,6 +340,8 @@ pdf2zh-server/
 | `zoteroPort` | `PDF2ZH_ZOTERO_PORT` | `8890` | Zotero 插件里要填的端口 |
 | `zoteroLogPath` | `PDF2ZH_ZOTERO_LOG` | `~/Library/Logs/pdf2zh-zotero.log` | 追加写入，权限 0600 |
 | `zoteroAutoStart` | `PDF2ZH_ZOTERO_AUTOSTART` | `true` | false 时只跑 WebUI |
+| `zoteroProgressPollSeconds` | — | `2` | 轮询 `/api/tasks` 的间隔（进度显示用） |
+| `checkUpdatesOnLaunch` | `PDF2ZH_CHECK_UPDATES` | `true` | false 时不在启动时检查更新（仍可手动检查） |
 
 ### 7.2 pdf2zh_next 路径探测
 
@@ -388,6 +437,7 @@ SVG 换了什么 viewBox 或带多少边距，都不用改代码。
 |---|---|
 | `PDF2ZH Web：<状态>` | 禁用状态行，实时反映 WebUI 状态机 |
 | `Zotero 服务：<状态>` | 禁用状态行；未安装时提示点击查看获取方式 |
+| `翻译中：<N>%（M 个任务）` | 仅在有翻译任务时显示；完成后短暂显示"翻译完成" |
 | 在浏览器中打开 ⌘O | 仅 WebUI `running` 可用 |
 | 复制服务地址 | 复制 WebUI 地址（`http://127.0.0.1:7860/`） |
 | 复制 Zotero 插件地址 | 复制 `http://127.0.0.1:8890`（不带路径，插件要的就是 host:port） |
@@ -397,6 +447,7 @@ SVG 换了什么 viewBox 或带多少边距，都不用改代码。
 | 重启 WebUI ⌘R | stop → 等 0.4s → start（`waitForPortFree`） |
 | 重启 Zotero 服务 | 同上；未安装时弹获取方式说明 |
 | `pdf2zh_next：<版本>` | 点击显示两个服务的运行环境详情（FR-14） |
+| `检查更新` / `有可用更新：<名称 版本>` | 无更新时作手动检查；已知有更新时列出并弹出升级指引（FR-19） |
 | 退出并停止全部服务 ⌘Q | `NSApp.terminate` → 两个服务都走清理路径 |
 
 ### 7.5 启动序列
@@ -626,6 +677,8 @@ md5 ~/.config/pdf2zh/config.v3.toml   # 必须与之前一致
 - [x] 崩溃与正常退出两条路径均无残留进程、无端口占用
 - [x] 不修改用户 `~/.config/pdf2zh/` 下的任何配置
 - [x] 构建自包含（模块缓存在 `build/` 内），可在沙箱 / CI 中运行
+- [x] FR-18：翻译中图标按总进度变绿，完成后回到常态；多任务取平均
+- [x] FR-19：自动检查两个上游的新版本并提醒，只检查不升级
 - [x] README（中英）、LICENSE、`.gitignore`、CI workflow 齐备
 
 ---

@@ -87,6 +87,10 @@ struct AppConfig {
     var zoteroLogPath: String
     /// Managed together with the WebUI by default; set false to run only the WebUI.
     var zoteroAutoStart: Bool
+    /// How often to poll `/api/tasks` while showing progress.
+    var zoteroProgressPollSeconds: Double
+    /// Whether to look for new releases at launch (manual checking stays available).
+    var checkUpdatesOnLaunch: Bool
 
     static let defaultPort = 7860
     static let defaultZoteroPort = 8890
@@ -174,7 +178,13 @@ struct AppConfig {
                 "zoteroLogPath", env: "PDF2ZH_ZOTERO_LOG",
                 fallback: home + "/Library/Logs/pdf2zh-zotero.log"
             ),
-            zoteroAutoStart: boolValue("zoteroAutoStart", env: "PDF2ZH_ZOTERO_AUTOSTART", fallback: true)
+            zoteroAutoStart: boolValue("zoteroAutoStart", env: "PDF2ZH_ZOTERO_AUTOSTART", fallback: true),
+            zoteroProgressPollSeconds: Double(
+                intValue("zoteroProgressPollSeconds", env: nil, fallback: 2)
+            ),
+            checkUpdatesOnLaunch: boolValue(
+                "checkUpdatesOnLaunch", env: "PDF2ZH_CHECK_UPDATES", fallback: true
+            )
         )
     }
 
@@ -686,6 +696,431 @@ func extractVersion(from output: String) -> String? {
     return nil
 }
 
+
+// MARK: - Update checking
+
+/// One "an update exists" fact, ready for the menu.
+struct AvailableUpdate {
+    let name: String
+    let current: String
+    let latest: String
+    let url: String
+}
+
+/// Checks the two upstreams for newer releases. It **only checks** — nothing is downloaded
+/// or installed. Upgrading pdf2zh_next can pull a new BabelDOC and re-download assets, and
+/// upgrading zotero-pdf2zh replaces a server the user may have customised, so those stay
+/// explicit user actions; this just surfaces that they are available.
+///
+/// Sources, deliberately the ones each project itself documents:
+///   * pdf2zh_next  -> PyPI JSON API (the package is installed by `uv tool install`)
+///   * zotero-pdf2zh -> its GitHub releases (the docs point users at releases, not PyPI)
+enum UpdateChecker {
+
+    static func check(completion: @escaping ([AvailableUpdate]) -> Void) {
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var found: [AvailableUpdate] = []
+
+        func add(_ update: AvailableUpdate?) {
+            guard let update else { return }
+            lock.lock(); found.append(update); lock.unlock()
+        }
+
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            add(checkPDF2ZH())
+            group.leave()
+        }
+
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            add(checkZoteroPDF2ZH())
+            group.leave()
+        }
+
+        group.notify(queue: .main) {
+            completion(found.sorted { $0.name < $1.name })
+        }
+    }
+
+    /// PyPI's per-release JSON. `releases` is keyed by version, so the newest key is the
+    /// newest version — cheaper and more reliable than parsing the HTML page.
+    private static func checkPDF2ZH() -> AvailableUpdate? {
+        guard let current = installedPDF2ZHVersion() else { return nil }
+        guard let json = fetchJSON("https://pypi.org/pypi/pdf2zh-next/json") else { return nil }
+        guard let releases = json["releases"] as? [String: Any] else { return nil }
+
+        let versions = releases.keys.filter { !$0.contains("-") }   // skip pre-releases
+        guard let latest = versions.max(by: { compareVersions($0, $1) == .orderedAscending }) else {
+            return nil
+        }
+        guard compareVersions(latest, current) == .orderedDescending else { return nil }
+        return AvailableUpdate(
+            name: "pdf2zh_next",
+            current: current,
+            latest: latest,
+            url: "https://pypi.org/project/pdf2zh-next/"
+        )
+    }
+
+    /// Reads the installed version out of the package on disk. `pdf2zh_next --version` would
+    /// work too but starts a whole interpreter for one string, so read the module's own
+    /// `__version__` instead.
+    ///
+    /// Note the shape of this: it checks a short list of *exact* file paths rather than
+    /// enumerating site-packages. A depth-first walk finds thousands of unrelated packages
+    /// before reaching pdf2zh_next, so any traversal budget either truncates before the hit
+    /// or costs hundreds of milliseconds; every supported install layout has a known path.
+    private static func installedPDF2ZHVersion() -> String? {
+        let home = NSHomeDirectory()
+        var candidates: [String] = []
+
+        // uv tool and pipx layouts, whose site-packages version directory varies.
+        let versionedRoots = [
+            home + "/.local/share/uv/tools/pdf2zh-next/lib",
+            home + "/.local/pipx/venvs/pdf2zh-next/lib"
+        ]
+        for root in versionedRoots {
+            guard let versions = try? FileManager.default.contentsOfDirectory(atPath: root) else { continue }
+            for version in versions {
+                candidates.append(root + "/" + version + "/site-packages/pdf2zh_next/__init__.py")
+            }
+        }
+        // Plain virtualenvs and the uv-tool variant that uses the default python.
+        candidates.append(contentsOf: [
+            home + "/.local/share/uv/tools/pdf2zh-next/lib/site-packages/pdf2zh_next/__init__.py",
+            home + "/.venv/lib/python3.12/site-packages/pdf2zh_next/__init__.py",
+            home + "/venv/lib/python3.12/site-packages/pdf2zh_next/__init__.py"
+        ])
+
+        for path in candidates {
+            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            if let version = firstMatch(in: text, pattern: "__version__\\s*=\\s*[\"']([0-9][0-9.]*)[\"']") {
+                return version
+            }
+        }
+
+        // Last resort: the metadata directory is named "<package>-<version>.dist-info".
+        for root in versionedRoots {
+            guard let versions = try? FileManager.default.contentsOfDirectory(atPath: root) else { continue }
+            for version in versions {
+                let sitePackages = root + "/" + version + "/site-packages"
+                guard let entries = try? FileManager.default.contentsOfDirectory(atPath: sitePackages) else { continue }
+                for entry in entries where entry.hasSuffix(".dist-info") {
+                    let lower = entry.lowercased()
+                    guard lower.hasPrefix("pdf2zh_next-") || lower.hasPrefix("pdf2zh-next-") else { continue }
+                    let stem = entry.replacingOccurrences(of: ".dist-info", with: "")
+                    if let dash = stem.range(of: "-", options: .backwards) {
+                        return String(stem[dash.upperBound...])
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// First capture group of `pattern`, or nil.
+    private static func firstMatch(in text: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(location: 0, length: (text as NSString).length)
+        guard let match = regex.firstMatch(in: text, range: range), match.numberOfRanges > 1 else { return nil }
+        return (text as NSString).substring(with: match.range(at: 1))
+    }
+
+    /// zotero-pdf2zh publishes its server as release assets, so the tag is the version.
+    private static func checkZoteroPDF2ZH() -> AvailableUpdate? {
+        guard let current = installedZoteroVersion() else { return nil }
+        guard let json = fetchJSON("https://api.github.com/repos/guaguastandup/zotero-pdf2zh/releases/latest"),
+              let tag = json["tag_name"] as? String else { return nil }
+
+        let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+        guard compareVersions(latest, current) == .orderedDescending else { return nil }
+        return AvailableUpdate(
+            name: "zotero-pdf2zh",
+            current: current,
+            latest: latest,
+            url: "https://github.com/guaguastandup/zotero-pdf2zh/releases/latest"
+        )
+    }
+
+    /// server.py declares its version as a module-level `__version__` (it prints the same
+    /// value on startup). Reading the source is more direct than scraping the log, and the
+    /// leading `## server.py v4.1.7` comment is accepted as a fallback.
+    private static func installedZoteroVersion() -> String? {
+        let path = AppConfig.resolveZoteroServer()
+        guard !path.isEmpty,
+              let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        let patterns = [
+            "__version__\\s*=\\s*[\"']([0-9][0-9.]*)[\"']",
+            "SERVER_VERSION\\s*=\\s*[\"']([0-9][0-9.]*)[\"']",
+            "^##\\s*server\\.py\\s*v([0-9][0-9.]*)"
+        ]
+        for pattern in patterns {
+            if let version = firstMatch(in: text, pattern: pattern) { return version }
+        }
+        return nil
+    }
+
+    private static func fetchJSON(_ urlString: String) -> [String: Any]? {
+        guard let url = URL(string: urlString) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        request.setValue("PDF2ZHWeb-MenuBar", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: [String: Any]?
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            if let data, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                result = object
+            }
+            semaphore.signal()
+        }.resume()
+        _ = semaphore.wait(timeout: .now() + 12)
+        return result
+    }
+
+    /// Numeric component-wise comparison, so "2.10.0" sorts above "2.9.0" (a string compare
+    /// would get that backwards, which is exactly the kind of bug that hides releases).
+    static func compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let left = lhs.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        let right = rhs.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        for index in 0..<max(left.count, right.count) {
+            let a = index < left.count ? left[index] : 0
+            let b = index < right.count ? right[index] : 0
+            if a != b { return a < b ? .orderedAscending : .orderedDescending }
+        }
+        return .orderedSame
+    }
+}
+
+
+// MARK: - Translation progress
+
+/// Polls zotero-pdf2zh's `/api/tasks` and reports aggregate progress.
+///
+/// That endpoint is the only place either service exposes per-task progress: it returns the
+/// active task list with a 0–100 `progress` field, updated by the server as it drives
+/// pdf2zh_next. The Gradio WebUI has no equivalent, so progress tracking is available only
+/// when the Zotero service is installed and translating.
+///
+/// "Overall progress" across several concurrent tasks is the mean of their percentages —
+/// the tasks are independent and roughly equal in cost, so an average is the honest summary
+/// and matches what a user means by "how far along am I".
+final class ProgressTracker {
+    private let port: Int
+    private let interval: TimeInterval
+    private var timer: Timer?
+    private var inFlight = false
+
+    /// Aggregate 0...1, or nil when nothing is running.
+    private(set) var fraction: Double?
+    /// How many tasks the current figure covers.
+    private(set) var taskCount: Int = 0
+    /// Set briefly when work finishes, so the icon can show a completed state.
+    private var completedAt: Date?
+
+    /// Called on the main queue when the reported progress changes.
+    var onChange: (() -> Void)?
+
+    init(port: Int, interval: TimeInterval) {
+        self.port = port
+        self.interval = max(1, interval)
+    }
+
+    var isTranslating: Bool { fraction != nil }
+
+    /// True for a couple of seconds after the last task finished: the menu shows a
+    /// "completed" note and the icon stays green, then everything returns to normal.
+    var justCompleted: Bool {
+        guard let completedAt else { return false }
+        return Date().timeIntervalSince(completedAt) < 4
+    }
+
+    func start() {
+        guard timer == nil else { return }
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.poll() }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+        poll()
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func poll() {
+        guard !inFlight else { return }
+
+        // Once the last task disappears, keep polling until the completion banner expires:
+        // the icon holds full green during that window and needs a tick to return to normal.
+        if timer != nil, fraction == nil, !justCompleted {
+            stop()
+            return
+        }
+
+        inFlight = true
+
+        let url = URL(string: "http://127.0.0.1:\(port)/api/tasks")!
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 4
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            // A refused connection is the normal case whenever the service is not running;
+            // treat any failure as "no tasks" rather than as an error to report.
+            var percentages: [Double] = []
+            if let data,
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let tasks = object["tasks"] as? [[String: Any]] {
+                for task in tasks {
+                    if let progress = task["progress"] as? Double {
+                        percentages.append(progress)
+                    } else if let progress = task["progress"] as? Int {
+                        percentages.append(Double(progress))
+                    }
+                }
+            }
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.inFlight = false
+                self.apply(percentages: percentages)
+            }
+        }.resume()
+    }
+
+    private func apply(percentages: [Double]) {
+        let previous = fraction
+        let previousCount = taskCount
+
+        if percentages.isEmpty {
+            if previous != nil { completedAt = Date() }
+            fraction = nil
+            taskCount = 0
+        } else if justCompleted, let held = fraction {
+            // Tasks reappeared within the completion window: the batch is still going, so
+            // keep the completed banner off and resume live progress from here.
+            completedAt = nil
+            fraction = min(1.0, max(0.0, percentages.reduce(0, +) / Double(percentages.count) / 100.0))
+            taskCount = percentages.count
+            _ = held
+        } else {
+            fraction = min(1.0, max(0.0, percentages.reduce(0, +) / Double(percentages.count) / 100.0))
+            taskCount = percentages.count
+        }
+
+        if fraction != previous || taskCount != previousCount {
+            onChange?()
+        } else if previous == nil, justCompleted {
+            // Keep refreshing while the "completed" note is on screen so it expires.
+            onChange?()
+        }
+    }
+}
+
+// MARK: - Progress icon
+
+/// Renders the menu bar mark with a progress overlay.
+///
+/// The mark is normally a template image, which macOS tints itself — that is why it adapts
+/// to light and dark menu bars for free, but it also means a template image can never be
+/// green. Progress therefore switches to a coloured bitmap drawn here instead.
+///
+/// The progress reads as a fill sweeping left to right: the finished portion is green, the
+/// rest stays close to the menu bar's own colour so the mark keeps its shape. The artwork is
+/// the same vector source as the template icon, so only the colouring differs.
+enum ProgressIcon {
+    private static var cachedPath: CGPath?
+
+    /// The mark's geometry, transcribed from assets/download.svg exactly as make-icons.swift
+    /// does (SVG y-down flipped to CoreGraphics y-up).
+    private static func markPath() -> CGPath {
+        if let cachedPath { return cachedPath }
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 296, y: 9))
+        path.addCurve(to: CGPoint(x: 254, y: -3), control1: CGPoint(x: 284, y: 1), control2: CGPoint(x: 269, y: -3))
+        path.addCurve(to: CGPoint(x: 169, y: 79), control1: CGPoint(x: 207, y: -3), control2: CGPoint(x: 169, y: 33))
+        path.addCurve(to: CGPoint(x: 254, y: 162), control1: CGPoint(x: 169, y: 125), control2: CGPoint(x: 207, y: 162))
+        path.addCurve(to: CGPoint(x: 305, y: 145), control1: CGPoint(x: 273, y: 162), control2: CGPoint(x: 289, y: 156))
+        path.addLine(to: CGPoint(x: 387, y: 89))
+        path.addCurve(to: CGPoint(x: 389, y: 57), control1: CGPoint(x: 399, y: 81), control2: CGPoint(x: 400, y: 67))
+        path.addCurve(to: CGPoint(x: 358, y: 56), control1: CGPoint(x: 381, y: 49), control2: CGPoint(x: 369, y: 49))
+        path.addLine(to: CGPoint(x: 278, y: 111))
+        path.addCurve(to: CGPoint(x: 254, y: 120), control1: CGPoint(x: 270, y: 117), control2: CGPoint(x: 262, y: 120))
+        path.addCurve(to: CGPoint(x: 214, y: 79), control1: CGPoint(x: 231, y: 120), control2: CGPoint(x: 214, y: 102))
+        path.addCurve(to: CGPoint(x: 257, y: 35), control1: CGPoint(x: 214, y: 55), control2: CGPoint(x: 232, y: 36))
+        path.closeSubpath()
+        path.move(to: CGPoint(x: 328, y: 149))
+        path.addCurve(to: CGPoint(x: 378, y: 163), control1: CGPoint(x: 343, y: 158), control2: CGPoint(x: 360, y: 163))
+        path.addCurve(to: CGPoint(x: 470, y: 80), control1: CGPoint(x: 429, y: 163), control2: CGPoint(x: 470, y: 127))
+        path.addCurve(to: CGPoint(x: 380, y: -3), control1: CGPoint(x: 470, y: 33), control2: CGPoint(x: 432, y: -3))
+        path.addCurve(to: CGPoint(x: 306, y: 20), control1: CGPoint(x: 352, y: -4), control2: CGPoint(x: 328, y: 4))
+        path.addLine(to: CGPoint(x: 242, y: 66))
+        path.addCurve(to: CGPoint(x: 239, y: 96), control1: CGPoint(x: 231, y: 74), control2: CGPoint(x: 229, y: 86))
+        path.addCurve(to: CGPoint(x: 268, y: 98), control1: CGPoint(x: 247, y: 105), control2: CGPoint(x: 258, y: 105))
+        path.addLine(to: CGPoint(x: 344, y: 44))
+        path.addCurve(to: CGPoint(x: 410, y: 49), control1: CGPoint(x: 365, y: 29), control2: CGPoint(x: 392, y: 32))
+        path.addCurve(to: CGPoint(x: 414, y: 107), control1: CGPoint(x: 430, y: 67), control2: CGPoint(x: 430, y: 91))
+        path.addCurve(to: CGPoint(x: 373, y: 118), control1: CGPoint(x: 404, y: 118), control2: CGPoint(x: 390, y: 122))
+        path.closeSubpath()
+        cachedPath = path
+        return path
+    }
+
+    /// Draw the mark at `size`, with the leftmost `fraction` of its width in `progressColor`
+    /// and the remainder in `restColor`.
+    static func image(size: NSSize, fraction: Double, restColor: NSColor) -> NSImage {
+        let width = max(1, Int((size.width * 2).rounded()))
+        let height = max(1, Int((size.height * 2).rounded()))
+
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return NSImage(size: size)
+        }
+        context.setAllowsAntialiasing(true)
+        context.setShouldAntialias(true)
+
+        // Fit the ink box into the canvas, exactly like the generator does, so the coloured
+        // icon lines up with the template one it replaces.
+        let source = markPath()
+        let ink = source.boundingBoxOfPath
+        let canvasW = CGFloat(width), canvasH = CGFloat(height)
+        let scale = min(canvasW / ink.width, canvasH / ink.height)
+        var transform = CGAffineTransform(translationX: canvasW / 2, y: canvasH / 2)
+            .scaledBy(x: scale, y: scale)
+            .translatedBy(x: -ink.midX, y: -ink.midY)
+        let fitted = source.copy(using: &transform) ?? source
+
+        // Everything in `restColor` first…
+        context.saveGState()
+        context.addPath(fitted)
+        context.setFillColor(restColor.cgColor)
+        context.fillPath()
+        context.restoreGState()
+
+        // …then the finished portion in green, clipped to the leftmost `fraction`.
+        let clamped = min(1.0, max(0.0, fraction))
+        if clamped > 0 {
+            context.saveGState()
+            context.clip(to: CGRect(x: 0, y: 0, width: canvasW * CGFloat(clamped), height: canvasH))
+            context.addPath(fitted)
+            context.setFillColor(NSColor.systemGreen.cgColor)
+            context.fillPath()
+            context.restoreGState()
+        }
+
+        guard let cgImage = context.makeImage() else { return NSImage(size: size) }
+        let image = NSImage(cgImage: cgImage, size: size)
+        image.isTemplate = false   // a coloured image must not be tinted by the system
+        return image
+    }
+}
+
 // MARK: - App delegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -704,6 +1139,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var zoteroItem: NSMenuItem?
     private var zoteroOpenItem: NSMenuItem?
     private var versionItem: NSMenuItem?
+    private var progressItem: NSMenuItem?
+    private var updateItem: NSMenuItem?
+
+    private var progressTracker: ProgressTracker?
+    private var updateCheckTimer: Timer?
+    private var appearanceObservation: NSKeyValueObservation?
+    private var availableUpdates: [AvailableUpdate] = []
+    /// The template (adaptive) icon, kept so it can be restored after a progress run.
+    private var templateIcon: NSImage?
+    private var lastIconSignature = ""
 
     /// Lock file descriptor held for the lifetime of the process (flock).
     private var lockFileDescriptor: Int32 = -1
@@ -773,6 +1218,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         queryVersion()
         writeConfigTemplateIfNeeded()
+        startProgressTracking()
+        if config.checkUpdatesOnLaunch {
+            checkForUpdates(userInitiated: false)
+        }
+
+        // Re-check periodically so a long-running session still learns about releases. A day
+        // is plenty: these are tools the user updates deliberately, not a security feed.
+        let updateTimer = Timer(timeInterval: 24 * 60 * 60, repeats: true) { [weak self] _ in
+            self?.checkForUpdates(userInitiated: false)
+        }
+        RunLoop.main.add(updateTimer, forMode: .common)
+        updateCheckTimer = updateTimer
+
+        // The coloured progress icon draws its own background-matched colour, so it has to be
+        // redrawn when the system switches between light and dark.
+        appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
+            self?.lastIconSignature = ""
+            self?.updateStatusIcon()
+        }
 
         guard webService.isInstalled else {
             updateMenu()
@@ -843,9 +1307,138 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startZotero(waitForPortFree: false)
     }
 
+    // MARK: Progress and updates
+
+    private func startProgressTracking() {
+        let tracker = ProgressTracker(port: config.zoteroPort, interval: config.zoteroProgressPollSeconds)
+        tracker.onChange = { [weak self] in self?.updateMenu() }
+        tracker.start()
+        progressTracker = tracker
+    }
+
+    /// Ask both upstreams whether newer releases exist. Nothing is installed; the menu
+    /// surfaces the result and the user decides (see UpdateChecker for why).
+    private func checkForUpdates(userInitiated: Bool) {
+        if userInitiated { updateItem?.title = "检查更新：检查中…" }
+        UpdateChecker.check { [weak self] updates in
+            guard let self else { return }
+            self.availableUpdates = updates
+            self.updateMenu()
+            if userInitiated, updates.isEmpty {
+                self.presentAlert(
+                    title: "已是最新版本",
+                    message: "pdf2zh_next 与 zotero-pdf2zh 都没有可用更新。",
+                    style: .informational
+                )
+            }
+        }
+    }
+
+    /// Icon reflects translation progress when there is any, and the plain template mark
+    /// otherwise. Rebuilt only when something it depends on actually changed, because
+    /// drawing costs far more than the comparison.
+    private func updateStatusIcon() {
+        guard let button = statusItem?.button else { return }
+
+        // While the completion banner is up, hold the icon at full green so "finished" is
+        // visible before the mark returns to its normal colour.
+        let fraction: Double?
+        if let live = progressTracker?.fraction {
+            fraction = live
+        } else if progressTracker?.justCompleted == true {
+            fraction = 1.0
+        } else {
+            fraction = nil
+        }
+
+        // Resting state: the template image, which macOS tints for light/dark menu bars.
+        guard let fraction else {
+            let signature = "template"
+            guard signature != lastIconSignature else { return }
+            lastIconSignature = signature
+            if let templateIcon { button.image = templateIcon }
+            return
+        }
+
+        // Colour cannot come from a template image, so draw a coloured bitmap instead. The
+        // unfinished remainder is drawn in the colour the template would have been tinted
+        // to, detected from the button's effective appearance.
+        let isDark = button.effectiveAppearance
+            .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let signature = String(format: "%.3f-%@", fraction, isDark ? "dark" : "light")
+        guard signature != lastIconSignature else { return }
+        lastIconSignature = signature
+
+        let size = templateIcon?.size ?? NSSize(width: 23.5, height: 13)
+        let rest: NSColor = isDark
+            ? NSColor(calibratedWhite: 1.0, alpha: 0.92)
+            : NSColor(calibratedWhite: 0.0, alpha: 0.92)
+        button.image = ProgressIcon.image(size: size, fraction: fraction, restColor: rest)
+    }
+
+    private func progressSummary() -> String? {
+        guard let tracker = progressTracker else { return nil }
+        if let fraction = tracker.fraction {
+            let percent = Int((fraction * 100).rounded())
+            let tasks = tracker.taskCount
+            return tasks > 1
+                ? "翻译中：\(percent)%（\(tasks) 个任务）"
+                : "翻译中：\(percent)%"
+        }
+        if tracker.justCompleted { return "翻译完成" }
+        return nil
+    }
+
+    // MARK: Update actions
+
+    /// One item doubles as "check now" and "show what was found", which keeps the menu
+    /// short: with updates known it reports them, otherwise it runs a check.
+    @objc private func updateItemClicked() {
+        if availableUpdates.isEmpty {
+            checkForUpdates(userInitiated: true)
+        } else {
+            showPendingUpdates()
+        }
+    }
+
+    @objc private func showPendingUpdates() {
+        guard !availableUpdates.isEmpty else {
+            checkForUpdates(userInitiated: true)
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        let lines = availableUpdates
+            .map { "\($0.name)  \($0.current) → \($0.latest)" }
+            .joined(separator: "\n")
+        let alert = NSAlert()
+        alert.messageText = "有可用更新"
+        alert.informativeText = """
+        \(lines)
+
+        本 App 只负责检查与提醒，不会自动升级：
+
+        • pdf2zh_next 由 uv tool 安装，在终端执行
+          uv tool upgrade pdf2zh-next
+          升级后点菜单“重启 WebUI”生效。升级可能带来新的 BabelDOC，首次翻译会重新下载资产。
+
+        • zotero-pdf2zh 的 server 是解压目录，按上游 release 替换：
+          https://github.com/guaguastandup/zotero-pdf2zh/releases/latest
+          升级后点菜单“重启 Zotero 服务”。
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "好")
+        alert.addButton(withTitle: "打开项目页")
+        if alert.runModal() == .alertSecondButtonReturn,
+           let first = availableUpdates.first,
+           let url = URL(string: first.url) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     // MARK: Menu
 
-    private func makeItem(_ title: String, action: Selector?, key: String = "") -> NSMenuItem {
+    private func makeItem(
+_ title: String, action: Selector?, key: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         if action != nil { item.target = self }
         return item
@@ -883,6 +1476,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if let image {
                 button.image = image
+                templateIcon = image
             } else {
                 button.title = "译"
             }
@@ -901,6 +1495,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         zotero.isEnabled = false
         zoteroItem = zotero
         menu.addItem(zotero)
+
+        // Only meaningful while a translation is running, so it hides itself otherwise.
+        let progress = makeItem("翻译中", action: nil)
+        progress.isEnabled = false
+        progress.isHidden = true
+        progressItem = progress
+        menu.addItem(progress)
         menu.addItem(.separator())
 
         let open = makeItem("在浏览器中打开", action: #selector(openInBrowser), key: "o")
@@ -929,6 +1530,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         versionItem = version
         menu.addItem(version)
 
+        let update = makeItem("检查更新", action: #selector(updateItemClicked))
+        updateItem = update
+        menu.addItem(update)
+
         menu.addItem(.separator())
         menu.addItem(makeItem("退出并停止全部服务", action: #selector(quitApp), key: "q"))
 
@@ -952,6 +1557,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let webUsable = webService.state.isRunning
         openItem.isEnabled = webUsable
         copyItem.isEnabled = webUsable
+
+        updateStatusIcon()
+
+        if let progressItem {
+            if let summary = progressSummary() {
+                progressItem.title = summary
+                progressItem.isHidden = false
+            } else {
+                progressItem.isHidden = true
+            }
+        }
+
+        if let updateItem {
+            if availableUpdates.isEmpty {
+                updateItem.title = "检查更新"
+            } else {
+                let names = availableUpdates.map { "\($0.name) \($0.latest)" }.joined(separator: "、")
+                updateItem.title = "有可用更新：\(names)"
+            }
+        }
 
         if let zoteroItem {
             if let zoteroService {
@@ -1233,7 +1858,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 "zoteroPythonPath": "运行 server.py 的解释器，通常是其同目录的 .venv/bin/python",
                 "zoteroPort": "Zotero 插件要填的端口（默认 8890）",
                 "zoteroLogPath": "Zotero 服务日志路径",
-                "zoteroAutoStart": "true 时随 WebUI 一起启动 Zotero 服务（默认 true）"
+                "zoteroAutoStart": "true 时随 WebUI 一起启动 Zotero 服务（默认 true）",
+                "zoteroProgressPollSeconds": "轮询 /api/tasks 的间隔秒数，用于图标进度（默认 2）",
+                "checkUpdatesOnLaunch": "false 时不在启动时检查更新，仍可从菜单手动检查（默认 true）"
             ],
             "pdf2zhPath": config.pdf2zhPath,
             "workingDirectory": config.workingDirectory,
@@ -1250,7 +1877,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "zoteroPythonPath": config.zoteroPythonPath,
             "zoteroPort": config.zoteroPort,
             "zoteroLogPath": config.zoteroLogPath,
-            "zoteroAutoStart": config.zoteroAutoStart
+            "zoteroAutoStart": config.zoteroAutoStart,
+            "zoteroProgressPollSeconds": Int(config.zoteroProgressPollSeconds),
+            "checkUpdatesOnLaunch": config.checkUpdatesOnLaunch
         ]
 
         guard let data = try? JSONSerialization.data(

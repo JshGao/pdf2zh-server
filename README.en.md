@@ -212,6 +212,36 @@ save in the GUI).
 
 ---
 
+## Translation progress
+
+While a translation runs, **the menu bar icon fills left to right in green** — the green share is
+the overall progress — and the menu shows `翻译中：45%（2 个任务）`. **With several tasks the
+overall figure is their mean.**
+
+When everything finishes the icon holds full green for four seconds before returning to normal,
+so "done" is actually visible.
+
+> Progress comes only from the Zotero service (`server.py`'s `/api/tasks`); the Gradio WebUI has
+> no equivalent endpoint. Without the Zotero service installed there is simply no progress line,
+> and nothing else changes.
+
+## Update checking
+
+At launch and every 24 hours afterwards the app asks both upstreams whether a newer release
+exists; the "check for updates" menu item does it on demand. When one is found the item reads
+`有可用更新：pdf2zh_next 2.10.0` and clicking it explains how to upgrade.
+
+**It only checks and reports — it never upgrades by itself.** Upgrading pdf2zh_next can pull a new
+BabelDOC and re-download assets, and upgrading zotero-pdf2zh replaces a server you may have
+customised; both should be your decision:
+
+```bash
+uv tool upgrade pdf2zh-next     # upgrade the WebUI, then "restart WebUI" from the menu
+```
+
+The zotero-pdf2zh server is an unpacked directory: replace it from the upstream release and use
+"restart Zotero service".
+
 ## How it works (short version)
 
 - `posix_spawn` with `POSIX_SPAWN_SETPGROUP` makes the supervisor its own process-group leader, so
