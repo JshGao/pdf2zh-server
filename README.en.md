@@ -52,10 +52,11 @@ You can also grab a prebuilt `PDF2ZH Web-<version>.dmg` (the app plus a shortcut
 or `PDF2ZH Web-<version>.zip` from Releases. Push a `v*` tag and CI builds, verifies and packages
 both on a macOS runner.
 
-Once launched, a **rounded square framing the 译 glyph** (the Chinese character for "translate") appears
-in the menu bar: it is a black-on-transparent template image,
+Once launched, a **rounded square framing 文 and A** (the Chinese character for "writing",
+next to the Latin letter) appears in the menu bar: it is a black-on-transparent template image,
 so macOS draws it black on a light menu bar and white on a dark one. It never shows up in the Dock or
-in Cmd-Tab (`LSUIElement=true`). In Finder, the app icon is a deep-blue rounded tile with a white 译.
+in Cmd-Tab (`LSUIElement=true`). In Finder, the app icon is the same idea at full size: a rounded tile
+split vertically into a blue half carrying a white 文 and a light grey half carrying a dark A.
 
 ### Menu
 
@@ -236,7 +237,7 @@ pdf2zh-server/
 │   ├── pdf2zh-status.png       # committed status bar icon (black on transparent, template-ready)
 │   └── icon-preview.png        # preview image used by the READMEs
 ├── scripts/
-│   ├── make-icons.swift        # renders the icons with CoreGraphics/CoreText (original 译 mark)
+│   ├── make-icons.swift        # renders the icons with CoreGraphics/CoreText (original 文/A mark)
 │   ├── package.sh              # packages .dmg / .zip
 │   └── verify.sh               # acceptance: static checks + runtime checks + teardown checks
 ├── .github/workflows/build.yml # CI: build + verify; publishes a Release on tags
@@ -274,8 +275,9 @@ pdf2zh-server/
   [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next). It does not
   modify upstream sources; it only calls its CLI (`pdf2zh_next --gui`).
 - Concept and engineering layout follow [DSH-desktop-server](https://github.com/JshGao/DSH-desktop-server) (MIT).
-- The icons are original to this project: a 译 mark rendered directly by `scripts/make-icons.swift`
-  with CoreGraphics/CoreText (deep-blue rounded tile, white glyph). They contain **no** artwork from
+- The icons are original to this project: a 文/A mark rendered directly by `scripts/make-icons.swift`
+  with CoreGraphics/CoreText (a two-tone rounded tile pairing a Chinese character with a Latin letter).
+  They contain **no** artwork from
   upstream PDFMathTranslate.
 - The code in this project is released under the [MIT](LICENSE) licence.
 

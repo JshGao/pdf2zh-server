@@ -34,11 +34,11 @@ let fileManager = FileManager.default
 try? fileManager.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
 
 /// A font that actually has the glyph we need; Helvetica silently renders .notdef.
-func chineseFont(size: CGFloat, bold: Bool = true) -> CTFont {
+func chineseFont(size: CGFloat, bold: Bool = true, character: String = "文") -> CTFont {
     let names = bold
         ? ["PingFangSC-Semibold", "PingFang SC", "STHeitiSC-Medium", "HiraginoSansGB-W6", "Helvetica"]
         : ["PingFangSC-Regular", "PingFang SC", "STHeitiSC-Light", "HiraginoSansGB-W3", "Helvetica"]
-    let probe: [UniChar] = Array("译".utf16)
+    let probe: [UniChar] = Array(character.utf16)
     for name in names {
         let font = CTFontCreateWithName(name as CFString, size, nil)
         var glyphs = [CGGlyph](repeating: 0, count: probe.count)
@@ -47,6 +47,24 @@ func chineseFont(size: CGFloat, bold: Bool = true) -> CTFont {
         }
     }
     return CTFontCreateWithName("PingFang SC" as CFString, size, nil)
+}
+
+/// Helvetica Bold: a squarer, heavier A than PingFang's Latin, which is what keeps the
+/// Latin half from looking weak next to a dense hanzi.
+func latinFont(size: CGFloat) -> CTFont {
+    CTFontCreateWithName("Helvetica-Bold" as CFString, size, nil)
+}
+
+/// Build a single-run line with CoreText attribute names directly, so this tool needs
+/// neither AppKit nor UIKit.
+func makeLine(_ text: String, font: CTFont, color: CGColor) -> CTLine {
+    let attributes: [NSAttributedString.Key: Any] = [
+        NSAttributedString.Key(kCTFontAttributeName as String): font,
+        NSAttributedString.Key(kCTForegroundColorAttributeName as String): color
+    ]
+    return CTLineCreateWithAttributedString(
+        NSAttributedString(string: text, attributes: attributes)
+    )
 }
 
 func makeContext(width: Int, height: Int) -> CGContext {
@@ -83,56 +101,33 @@ func writePNG(_ image: CGImage, to path: String) {
     }
 }
 
-/// Draw a single glyph centred on its *ink* box and return the box it occupied.
+/// The status bar mark: 文 and A side by side inside a rounded square outline.
 ///
-/// Centring on the ink box rather than the typographic line box matters a lot for CJK:
-/// PingFang reports ascent 1.06em and descent 0.34em, so the line box is 1.4em tall while
-/// a hanzi only inks roughly 0.92em sitting entirely above the baseline. Deriving the
-/// origin from ascent/descent therefore parks the character visibly high. `opticalShiftEm`
-/// then nudges it for the fact that hanzi carry more stroke weight in their upper half,
-/// so a mathematically centred glyph still reads as slightly too high.
-@discardableResult
-func drawCenteredGlyph(
-    _ text: String,
-    in context: CGContext,
-    canvas: CGFloat,
-    fontSize: CGFloat,
-    color: CGColor,
-    opticalShiftEm: CGFloat = 0
-) -> CGRect {
-    let font = chineseFont(size: fontSize)
-    // CoreText attribute names directly, so this tool needs neither AppKit nor UIKit.
-    let attributes: [NSAttributedString.Key: Any] = [
-        NSAttributedString.Key(kCTFontAttributeName as String): font,
-        NSAttributedString.Key(kCTForegroundColorAttributeName as String): color
-    ]
-    let attributed = NSAttributedString(string: text, attributes: attributes)
-    let line = CTLineCreateWithAttributedString(attributed)
-    let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
-
-    let originX = (canvas - ink.width) / 2 - ink.minX
-    let originY = (canvas - ink.height) / 2 - ink.minY + opticalShiftEm * fontSize
-
-    context.textPosition = CGPoint(x: originX, y: originY)
-    CTLineDraw(line, context)
-    return CGRect(x: originX + ink.minX, y: originY + ink.minY, width: ink.width, height: ink.height)
-}
-
-/// The status bar mark: the 译 character inside a rounded square outline.
+/// The 文/A pair carries the "Chinese in, Latin out" idea of translation, and the outline
+/// gives the mark the graphic weight of a real icon next to the system glyphs — a bare
+/// hanzi reads as too light in the menu bar. Every dimension (stroke, corner radius,
+/// character sizes, clearances) is a fraction of the canvas, so one description renders
+/// correctly at 16pt and at 1024pt with no bitmap scaling anywhere.
 ///
-/// The outline gives it the graphic weight of a real icon next to the system glyphs,
-/// which a bare hanzi lacks, while the minimal stroke count keeps it legible at 22pt.
-/// Everything (stroke width, corner radius, glyph size, clearances) is expressed as a
-/// fraction of the canvas so the same description renders correctly at 16pt and 1024pt.
+/// Vertical placement is derived from each character's *ink* box, never from ascent and
+/// descent. PingFang reports ascent 1.06em and descent 0.34em, so the typographic line box
+/// is 1.4em tall while a hanzi only inks about 0.92em sitting entirely above the baseline;
+/// deriving the origin from ascent/descent parks the character visibly high (~13% of the
+/// canvas). The extra `shift` then corrects the optical centre, because hanzi carry more
+/// stroke weight in their upper half and so still read slightly high when centred exactly.
+///
+/// The Latin side is set larger than the hanzi on purpose: 文 has many strokes and
+/// therefore more ink, while A has three. Matching the two by cap height leaves the pair
+/// visibly lopsided, so the A is scaled up until the two halves read at equal weight.
 func drawFramedMark(in context: CGContext, canvas: CGFloat, color: CGColor) {
-    let strokeWidth = canvas * 0.075
+    let strokeWidth = canvas * 0.072
     // Inset by half the stroke so the outline's outer edge lands on the canvas edge
     // rather than being clipped by it.
-    let inset = strokeWidth / 2 + canvas * 0.02
+    let inset = strokeWidth / 2 + canvas * 0.032
     let rect = CGRect(
         x: inset, y: inset, width: canvas - inset * 2, height: canvas - inset * 2
     )
-    let radius = canvas * 0.26
+    let radius = canvas * 0.25
 
     context.saveGState()
     context.addPath(
@@ -144,53 +139,103 @@ func drawFramedMark(in context: CGContext, canvas: CGFloat, color: CGColor) {
     context.strokePath()
     context.restoreGState()
 
-    drawCenteredGlyph(
-        "译",
-        in: context,
-        canvas: canvas,
-        fontSize: canvas * 0.52,
-        color: color,
-        opticalShiftEm: -0.018
+    let hanSize = canvas * 0.40
+    let latinSize = hanSize * 1.24
+    let hanLine = makeLine("文", font: chineseFont(size: hanSize), color: color)
+    let latinLine = makeLine("A", font: latinFont(size: latinSize), color: color)
+    let hanInk = CTLineGetBoundsWithOptions(hanLine, .useGlyphPathBounds)
+    let latinInk = CTLineGetBoundsWithOptions(latinLine, .useGlyphPathBounds)
+
+    let gap = canvas * 0.02
+    let totalWidth = hanInk.width + gap + latinInk.width
+    let startX = rect.midX - totalWidth / 2
+    // Both characters sit on a common optical centre; the shift is the same hanzi
+    // correction described in drawFramedMark.
+    let shift = -0.010 * hanSize
+
+    context.textPosition = CGPoint(
+        x: startX - hanInk.minX,
+        y: rect.midY - hanInk.height / 2 - hanInk.minY + shift
     )
+    CTLineDraw(hanLine, context)
+    context.textPosition = CGPoint(
+        x: startX + hanInk.width + gap - latinInk.minX,
+        y: rect.midY - latinInk.height / 2 - latinInk.minY + shift
+    )
+    CTLineDraw(latinLine, context)
 }
 
-/// The macOS-style rounded tile, drawn as a path so it scales to any size.
-func drawTile(in context: CGContext, canvas: CGFloat) {
-    let inset = canvas * 0.08
+/// The app icon: a rounded tile split into a blue half and a light half, carrying the
+/// same 文 / A pairing as the status bar mark. The two-tone split is what gives the icon
+/// its depth — a single flat colour with a character on it reads as a placeholder.
+func drawAppTile(in context: CGContext, canvas: CGFloat) {
+    let inset = canvas * 0.055
     let rect = CGRect(x: inset, y: inset, width: canvas - inset * 2, height: canvas - inset * 2)
     let radius = rect.width * 0.2237 // Apple's squircle-ish corner ratio
-
     let path = CGPath(
         roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil
     )
+
     context.saveGState()
     context.addPath(path)
     context.clip()
 
-    // Vertical gradient: deep indigo at the top, a lighter blue at the bottom.
+    // Right half: cool light grey, the "target language" side.
+    context.setFillColor(CGColor(red: 0.847, green: 0.867, blue: 0.894, alpha: 1))
+    context.fill(rect)
+
+    // Left half: blue gradient, the "source language" side.
+    let splitRatio: CGFloat = 0.52
+    let blue = CGRect(
+        x: rect.minX, y: rect.minY, width: rect.width * splitRatio, height: rect.height
+    )
+    context.saveGState()
+    context.clip(to: blue)
     let colors = [
-        CGColor(red: 0.145, green: 0.243, blue: 0.541, alpha: 1.0),
-        CGColor(red: 0.192, green: 0.400, blue: 0.800, alpha: 1.0)
+        CGColor(red: 0.129, green: 0.420, blue: 0.882, alpha: 1.0),
+        CGColor(red: 0.086, green: 0.310, blue: 0.749, alpha: 1.0)
     ] as CFArray
     if let gradient = CGGradient(
         colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]
     ) {
         context.drawLinearGradient(
             gradient,
-            start: CGPoint(x: rect.minX, y: rect.maxY),
-            end: CGPoint(x: rect.maxX, y: rect.minY),
+            start: CGPoint(x: blue.minX, y: blue.maxY),
+            end: CGPoint(x: blue.maxX, y: blue.minY),
             options: []
         )
     }
     context.restoreGState()
-
-    // A hairline highlight so the tile reads as a physical object at large sizes.
-    context.saveGState()
-    context.addPath(path)
-    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.18))
-    context.setLineWidth(max(1, canvas * 0.004))
-    context.strokePath()
     context.restoreGState()
+
+    // 文 in white on the blue side, A in near-black on the light side. Each is centred on
+    // its own half, which is why the two halves are measured independently.
+    let hanSize = canvas * 0.30
+    let latinSize = canvas * 0.355
+    let hanLine = makeLine(
+        "文", font: chineseFont(size: hanSize),
+        color: CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+    )
+    let latinLine = makeLine(
+        "A", font: latinFont(size: latinSize),
+        color: CGColor(red: 0.180, green: 0.208, blue: 0.267, alpha: 1)
+    )
+    let hanInk = CTLineGetBoundsWithOptions(hanLine, .useGlyphPathBounds)
+    let latinInk = CTLineGetBoundsWithOptions(latinLine, .useGlyphPathBounds)
+    let shift = -0.010 * hanSize
+
+    context.textPosition = CGPoint(
+        x: blue.midX - hanInk.width / 2 - hanInk.minX,
+        y: rect.midY - hanInk.height / 2 - hanInk.minY + shift
+    )
+    CTLineDraw(hanLine, context)
+
+    let lightHalfMidX = (blue.maxX + rect.maxX) / 2
+    context.textPosition = CGPoint(
+        x: lightHalfMidX - latinInk.width / 2 - latinInk.minX,
+        y: rect.midY - latinInk.height / 2 - latinInk.minY + shift
+    )
+    CTLineDraw(latinLine, context)
 }
 
 // MARK: - App icon (1024pt master)
@@ -199,15 +244,7 @@ let masterSize = 1024
 let master = makeContext(width: masterSize, height: masterSize)
 let masterCanvas = CGFloat(masterSize)
 // Transparent margin around the tile keeps the icon from looking oversized in the Dock.
-drawTile(in: master, canvas: masterCanvas)
-drawCenteredGlyph(
-    "译",
-    in: master,
-    canvas: masterCanvas,
-    fontSize: masterCanvas * 0.52,
-    color: CGColor(red: 1, green: 1, blue: 1, alpha: 1),
-    opticalShiftEm: -0.018
-)
+drawAppTile(in: master, canvas: masterCanvas)
 guard let masterImage = master.makeImage() else {
     FileHandle.standardError.write(Data("无法生成主图标位图\n".utf8))
     exit(1)

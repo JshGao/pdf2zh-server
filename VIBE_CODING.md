@@ -201,7 +201,7 @@ pdf2zh-server/
 │   ├── pdf2zh-status.png       # 提交的状态栏图标产物（黑字 + 透明底，可作模板图）
 │   └── icon-preview.png        # README 预览图
 ├── scripts/
-│   ├── make-icons.swift        # CoreGraphics/CoreText 渲染图标（原创"译"字标识，不含上游美术资源）
+│   ├── make-icons.swift        # CoreGraphics/CoreText 渲染图标（原创"文A"标识，不含上游美术资源）
 │   ├── package.sh              # 打包 .dmg / .zip
 │   └── verify.sh               # 验收：静态检查 + 运行期检查 + 退出清理检查
 ├── .github/workflows/build.yml # CI：构建 + 验收；打标签时发布 Release
@@ -251,25 +251,30 @@ pdf2zh-server/
 
 全部落空 → `pdf2zhPath` 为空 → 状态 `missingDependency`，菜单状态行明示并弹安装引导。
 
-### 7.3 状态栏图标
+### 7.3 图标
 
-优先使用 bundle 里的 `pdf2zh-status.png`（22pt，`isTemplate = true`）：macOS 会按菜单栏明暗
-自动着色，浅色栏显示黑色、深色栏显示白色。取不到时回退到 SF Symbols
-（`translate` → `character.book.closed` → `doc.text.magnifyingglass` → `doc.text`），再不行用文字"译"。
+**状态栏图标**优先使用 bundle 里的 `pdf2zh-status.png`（22pt，`isTemplate = true`）：macOS 会按
+菜单栏明暗自动着色，浅色栏显示黑色、深色栏显示白色。取不到时回退到 SF Symbols
+（`translate` → `character.book.closed` → `doc.text.magnifyingglass` → `doc.text`），再不行用文字"文A"。
 
-图形是**圆角方框 + "译"字**：纯汉字在菜单栏里视觉重量偏轻，跟旁边的系统图标不搭；加一圈描边后
-重量相当，同时兼作图形元素，比裸字更像个图标。全部尺寸由画布比例推导（描边 7.5%、圆角半径 26%、
-字号 52%、内缩 2%），所以同一份描述在 16pt 和 1024pt 都成立，不存在位图缩放。
+图形是**圆角方框 + "文 A"**，设计语言取自常见的翻译类应用图标：中文字符与拉丁字母并置，
+直接表达"中译外"。纯汉字在菜单栏里视觉重量偏轻，跟旁边的系统图标不搭；加一圈描边后重量相当，
+同时兼作图形元素。全部尺寸由画布比例推导（描边 7.2%、圆角半径 25%、内缩 3.2%、汉字 40%），
+所以同一份描述在 16pt 和 1024pt 都成立，不存在位图缩放。
+
+两个字符的**字号刻意不等**：汉字"文"笔画多、墨量大，而"A"只有三笔。按字高对齐会让整组左重右轻，
+所以拉丁侧放大到汉字的 1.24 倍，直到左右两半读起来重量相当。
 
 **垂直定位必须基于墨迹边界，不能用 ascent/descent。** PingFang 报告 ascent 1.06em、descent 0.34em，
 行框高 1.4em，而汉字墨迹只有约 0.92em 且完全在基线之上；由 ascent/descent 反推原点会把字顶高
 （实测偏移约 13% 画布高）。因此统一用 `CTLineGetBoundsWithOptions(.useGlyphPathBounds)` 的墨迹框
-居中，再用 `opticalShiftEm = -0.018` 做光学补偿——汉字上半部笔画更密，几何居中看起来仍偏高。
-App 图标里的"译"字同理。
+居中，再叠一个光学补偿偏移——汉字上半部笔画更密，几何居中看起来仍偏高。
+
+**App 图标**是同一套语言的放大版：圆角底板竖直分割成蓝色（渐变）与浅灰两半，蓝色半边放白色"文"、
+浅灰半边放深色"A"，各自在自己半边居中。双色分割是它质感的来源——单色底板压一个字符只会像占位图。
 
 图标由 `scripts/make-icons.swift` 用 CoreGraphics/CoreText 直接光栅化生成，矢量描述在代码里，
-每个尺寸独立渲染而不是位图缩放。这是**原创标识**（深蓝圆角底板 + 白色"译"字），不使用上游
-PDFMathTranslate 的任何美术资源。
+每个尺寸独立渲染而不是位图缩放。这是**原创标识**，不使用上游 PDFMathTranslate 的任何美术资源。
 
 ### 7.4 状态栏菜单
 
@@ -525,5 +530,5 @@ md5 ~/.config/pdf2zh/config.v3.toml   # 必须与之前一致
 - 本项目是 [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next)
   的**非官方**启动器，不修改上游源码，只调用其 CLI（`pdf2zh_next --gui`）。
 - 概念与工程结构参考 [DSH-desktop-server](https://github.com/JshGao/DSH-desktop-server)（MIT）。
-- 图标为本项目原创（`scripts/make-icons.swift` 渲染的"译"字标识），不含上游美术资源。
+- 图标为本项目原创（`scripts/make-icons.swift` 渲染的"文 A"标识），不含上游美术资源。
 - 本项目代码以 [MIT](LICENSE) 许可发布。
