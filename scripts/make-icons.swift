@@ -68,94 +68,103 @@ func writePNG(_ image: CGImage, to path: String) {
     }
 }
 
-/// The status bar mark: 文 and A side by side inside a rounded square outline.
+/// The infinity outline, filled rather than stroked.
 ///
-/// The 文/A pair carries the "Chinese in, Latin out" idea of translation, and the outline
-/// gives the mark the graphic weight of a real icon next to the system glyphs — a bare
-/// hanzi reads as too light in the menu bar. Every dimension (stroke, corner radius,
-/// character sizes, clearances) is a fraction of the canvas, so one description renders
-/// correctly at 16pt and at 1024pt with no bitmap scaling anywhere.
+/// Filling is what makes the design possible: the mark is a solid block pierced by two
+/// circular holes, so the remaining material reads as a single ribbon folding back on
+/// itself — the crossing only works because the shape is one continuous area, not two
+/// strokes laid over each other.
 ///
-/// Vertical placement is derived from each character's *ink* box, never from ascent and
-/// descent. PingFang reports ascent 1.06em and descent 0.34em, so the typographic line box
-/// is 1.4em tall while a hanzi only inks about 0.92em sitting entirely above the baseline;
-/// deriving the origin from ascent/descent parks the character visibly high (~13% of the
-/// canvas). The extra `shift` then corrects the optical centre, because hanzi carry more
-/// stroke weight in their upper half and so still read slightly high when centred exactly.
-/// The infinity curve, built from four cubic Béziers and centred on `center`.
+/// The outline is four cubic Beziers forming one closed loop; the lobes meet at the centre
+/// point, so the waist comes out of the geometry instead of being faked.
 ///
-/// The two lobes are drawn as one closed loop, so the waist crossing comes out of the
-/// geometry rather than being faked: the left lobe leaves the centre downwards, returns
-/// to it from above, and the right lobe mirrors that. Both strokes pass through exactly
-/// the same point, which is what makes the crossing read as a single continuous ribbon.
+/// Proportions are fractions of the canvas, so one description serves 16pt and 1024pt:
 ///
-/// The proportions are deliberate. `lobeHalfHeight` (0.265 of the canvas) is what separates
-/// a real ∞ from a bow tie — flatten it much further and the lobes collapse into two kinked
-/// squares, while growing it makes the mark too tall for a 22pt status item. `controlPull`
-/// (0.42) keeps the belly round instead of pinching the waist. `halfWidth` (0.375) is capped
-/// by the stroke width: at 0.195 the ink already spans 94.5% of the canvas, so widening the
-/// curve further would push the outline off the edge. All values are fractions of the canvas
-/// so one description serves 16pt and 1024pt alike.
-func infinityPath(center: CGPoint, size: CGFloat) -> CGPath {
-    let halfWidth = size * 0.375
-    let lobeHalfHeight = size * 0.265
-    let controlPull: CGFloat = 0.42
+/// | value | meaning |
+/// |---|---|
+/// | `width` 0.96 | the mark spans nearly the full menu bar height budget |
+/// | `lobeHeightRatio` 0.62 | lobe vertical radius as a fraction of the half width. Lower and the lobes flatten into a bow tie; higher and the 22pt mark grows too tall |
+/// | `holeOffset` 0.29 | hole centre distance from the middle, as a fraction of the total width |
+/// | `holeRadius` 0.175 | hole radius, as a fraction of the total width |
+///
+/// The two holes are the entire "design": they carve the solid mass into a ribbon and give
+/// the mark a light centre. Earlier revisions tried an interior spiral line for the same
+/// effect, which turned to mud at 22pt — holes work where lines do not, because a hole
+/// scales as a shape while a 1px line does not.
+func infinityOutline(center: CGPoint, width: CGFloat) -> CGPath {
+    let halfWidth = width / 2
+    let lobeRadius = halfWidth * 0.60
+    let controlPull: CGFloat = 0.52
+    // The two halves meet across a short vertical segment rather than at a single point.
+    // A zero-height waist pinches the ribbon into a spike that all but disappears at 22pt;
+    // this keeps the crossing solid while still reading as one continuous band.
+    let waistHalf = width * 0.03
     let cx = center.x
     let cy = center.y
 
     let path = CGMutablePath()
     path.move(to: CGPoint(x: cx - halfWidth, y: cy))
-    // Left lobe: out to the left, over the top, back to the middle.
     path.addCurve(
-        to: CGPoint(x: cx, y: cy),
-        control1: CGPoint(x: cx - halfWidth, y: cy + lobeHalfHeight * 1.45),
-        control2: CGPoint(x: cx - halfWidth * controlPull, y: cy + lobeHalfHeight * 1.05)
+        to: CGPoint(x: cx, y: cy + waistHalf),
+        control1: CGPoint(x: cx - halfWidth, y: cy + lobeRadius * 1.55),
+        control2: CGPoint(x: cx - halfWidth * controlPull, y: cy + lobeRadius * 1.12)
     )
-    // Right lobe: down from the middle, under the bottom, back out to the right.
     path.addCurve(
         to: CGPoint(x: cx + halfWidth, y: cy),
-        control1: CGPoint(x: cx + halfWidth * controlPull, y: cy + lobeHalfHeight * 1.05),
-        control2: CGPoint(x: cx + halfWidth, y: cy + lobeHalfHeight * 1.45)
+        control1: CGPoint(x: cx + halfWidth * controlPull, y: cy + lobeRadius * 1.12),
+        control2: CGPoint(x: cx + halfWidth, y: cy + lobeRadius * 1.55)
     )
-    // Mirror of the above two, below the waist.
     path.addCurve(
-        to: CGPoint(x: cx, y: cy),
-        control1: CGPoint(x: cx + halfWidth, y: cy - lobeHalfHeight * 1.45),
-        control2: CGPoint(x: cx + halfWidth * controlPull, y: cy - lobeHalfHeight * 1.05)
+        to: CGPoint(x: cx, y: cy - waistHalf),
+        control1: CGPoint(x: cx + halfWidth, y: cy - lobeRadius * 1.55),
+        control2: CGPoint(x: cx + halfWidth * controlPull, y: cy - lobeRadius * 1.12)
     )
     path.addCurve(
         to: CGPoint(x: cx - halfWidth, y: cy),
-        control1: CGPoint(x: cx - halfWidth * controlPull, y: cy - lobeHalfHeight * 1.05),
-        control2: CGPoint(x: cx - halfWidth, y: cy - lobeHalfHeight * 1.45)
+        control1: CGPoint(x: cx - halfWidth * controlPull, y: cy - lobeRadius * 1.12),
+        control2: CGPoint(x: cx - halfWidth, y: cy - lobeRadius * 1.55)
     )
     path.closeSubpath()
     return path
 }
 
-/// The status bar mark: a single heavy stroked ∞. No text, no frame, no internal detail.
+/// Add the two ribbon holes to an outline, returning a path meant to be filled even-odd.
+func infinityRibbon(center: CGPoint, width: CGFloat) -> CGPath {
+    let path = CGMutablePath()
+    path.addPath(infinityOutline(center: center, width: width))
+    let offset = width * 0.29
+    let radius = width * 0.175
+    for sign in [-1.0, 1.0] {
+        path.addEllipse(
+            in: CGRect(
+                x: center.x + CGFloat(sign) * offset - radius,
+                y: center.y - radius,
+                width: radius * 2,
+                height: radius * 2
+            )
+        )
+    }
+    return path
+}
+
+/// The status bar mark: a solid ∞ pierced by two holes, filled even-odd.
 ///
-/// The stroke is 19.5% of the canvas — deliberately far heavier than a "correct" stroke
-/// weight would be. At 22pt a thin outline reads as a hairline scribble next to the solid
-/// system glyphs it sits among; a heavy stroke gives the mark the same blocky presence.
-/// Earlier revisions drew a thin outline with a decorative inner spiral, which turned to
-/// mud at this size: any interior detail is unreadable here, so the curve is the whole mark.
+/// No stroke anywhere — a stroked version of this shape at 22pt sits next to the solid
+/// system glyphs as a hairline, while the filled ribbon has the same blocky presence.
 func drawFramedMark(in context: CGContext, canvas: CGFloat, color: CGColor) {
     context.saveGState()
-    context.addPath(infinityPath(center: CGPoint(x: canvas / 2, y: canvas / 2), size: canvas))
-    context.setStrokeColor(color)
-    context.setLineWidth(canvas * 0.195)
-    context.setLineJoin(.round)
-    context.setLineCap(.round)
-    context.strokePath()
+    context.addPath(infinityRibbon(center: CGPoint(x: canvas / 2, y: canvas / 2), width: canvas * 0.96))
+    context.setFillColor(color)
+    context.fillPath(using: .evenOdd)
     context.restoreGState()
 }
 
 /// The app icon: a rounded tile with a blue gradient and a heavy white ∞ centred on it.
 ///
 /// The gradient (rather than a flat fill) plus the generous inset are what keep it from
-/// reading as a placeholder. The ∞ is sized to the tile, not the canvas, so the optical
-/// margin stays constant no matter how much bleed the icon needs; its stroke keeps the same
-/// 19.5% ratio as the status bar mark so both read as the same object at different scales.
+/// reading as a placeholder. The ∞ uses the same filled-ribbon geometry as the status bar
+/// mark, filled white with even-odd so the two holes let the blue show through — the two
+/// icons read as the same object at different scales.
 func drawAppTile(in context: CGContext, canvas: CGFloat) {
     let inset = canvas * 0.055
     let rect = CGRect(x: inset, y: inset, width: canvas - inset * 2, height: canvas - inset * 2)
@@ -169,8 +178,8 @@ func drawAppTile(in context: CGContext, canvas: CGFloat) {
     context.clip()
 
     let colors = [
-        CGColor(red: 0.169, green: 0.478, blue: 0.925, alpha: 1.0),
-        CGColor(red: 0.075, green: 0.286, blue: 0.722, alpha: 1.0)
+        CGColor(red: 0.145, green: 0.451, blue: 0.914, alpha: 1.0),
+        CGColor(red: 0.055, green: 0.263, blue: 0.698, alpha: 1.0)
     ] as CFArray
     if let gradient = CGGradient(
         colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]
@@ -184,17 +193,12 @@ func drawAppTile(in context: CGContext, canvas: CGFloat) {
     }
     context.restoreGState()
 
-    // The ∞ is stroked at 9% of the tile, which keeps its ribbon weight in proportion to
-    // the tile at every icon size while staying clearly open in the middle.
     context.saveGState()
     context.addPath(
-        infinityPath(center: CGPoint(x: rect.midX, y: rect.midY), size: rect.width * 0.78)
+        infinityRibbon(center: CGPoint(x: rect.midX, y: rect.midY), width: rect.width * 0.80)
     )
-    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-    context.setLineWidth(rect.width * 0.78 * 0.195)
-    context.setLineJoin(.round)
-    context.setLineCap(.round)
-    context.strokePath()
+    context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    context.fillPath(using: .evenOdd)
     context.restoreGState()
 }
 
