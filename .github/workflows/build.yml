@@ -39,6 +39,17 @@ jobs:
           uv tool install --python 3.12 pdf2zh-next
           ls -la "$HOME/.local/share/uv/tools/pdf2zh-next/bin/pdf2zh_next"
 
+      # BabelDOC keeps its asset catalogue in a SQLite file (~/.cache/babeldoc/cache.v1.db).
+      # On a cold runner the app's own launch races with it and the service dies with
+      # "peewee.OperationalError: database is locked" — a genuine CI-only failure that has
+      # nothing to do with the app. Priming the catalogue once here means the service starts
+      # against a settled database. It also proves the assets are downloadable.
+      - name: 预热 BabelDOC 资产（避免 CI 上 SQLite 冷启动竞争）
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          pdf2zh_next --warmup
+          ls -la "$HOME/.cache/babeldoc" | head -10
+
       - name: 构建
         env:
           PDF2ZH_VERSION: ${{ steps.version.outputs.value }}
