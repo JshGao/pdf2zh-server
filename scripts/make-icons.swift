@@ -8,10 +8,13 @@
 // Produces:
 //   AppIcon.iconset/  -> fed to `iconutil -c icns`
 //   AppIcon.icns      -> copied into the .app by build.sh
-//   pdf2zh-status.png -> status bar template image (22pt, black on transparent)
+//   pdf2zh-status.png -> status bar template image (16pt tall, black on transparent)
 //   icon-preview.png  -> 256px preview for the README
 //
-// The design is a deep-blue rounded tile carrying the character 译 ("translate").
+// The design is the author's own mark — two interlocking loops, defined as vector paths in
+// assets/download.svg and transcribed into `interlockingLoopsPath()` below. The app icon is
+// that same mark on a hand-composited liquid-glass tile. There is no text anywhere in the
+// artwork: every glyph-based revision was dropped (see VIBE_CODING.md §7.3 for why).
 // It deliberately avoids upstream artwork: this is an unofficial launcher, not a
 // redistribution of PDFMathTranslate assets.
 
@@ -339,7 +342,7 @@ if let preview = previewContext.makeImage() {
 //
 // Rendered at 2x the display size so it stays crisp on Retina.
 let statusInk = interlockingLoopsPath().boundingBoxOfPath
-let statusHeightPt: CGFloat = 16
+let statusHeightPt: CGFloat = 13
 let statusHeightPx = Int((statusHeightPt * 2).rounded())
 let statusWidthPx = Int((statusHeightPt * 2 * statusInk.width / statusInk.height).rounded())
 let statusContext = makeContext(width: statusWidthPx, height: statusHeightPx)
