@@ -52,7 +52,7 @@ You can also grab a prebuilt `PDF2ZH Web-<version>.dmg` (the app plus a shortcut
 or `PDF2ZH Web-<version>.zip` from Releases. Push a `v*` tag and CI builds, verifies and packages
 both on a macOS runner.
 
-Once launched, a **solid ∞ pierced by two round holes** (a folded ribbon) appears in the menu bar: it is a black-on-transparent template image,
+Once launched, **two interlocking loops** (the author's own vector mark) appear in the menu bar: it is a black-on-transparent template image,
 so macOS draws it black on a light menu bar and white on a dark one. It never shows up in the Dock or
 in Cmd-Tab (`LSUIElement=true`). In Finder, the app icon is a rounded blue gradient tile with a
 centred white ∞.
@@ -232,8 +232,9 @@ pdf2zh-server/
 ├── main.swift                  # the whole menu bar app (config, state machine, posix_spawn, readiness, cleanup)
 ├── build.sh                    # builds the .app: compile + icons + Info.plist + ad-hoc signature
 ├── assets/
-│   ├── AppIcon.icns            # committed app icon artefact (source of truth at build time)
-│   ├── pdf2zh-status.png       # committed status bar icon (solid ∞ with two round holes, black on transparent)
+│   ├── download.svg            # the mark's source of truth (hand-drawn vector)
+│   ├── AppIcon.icns            # committed app icon artefact
+│   ├── pdf2zh-status.png       # committed status bar icon (interlocking loops, black on transparent)
 │   └── icon-preview.png        # preview image used by the READMEs
 ├── scripts/
 │   ├── make-icons.swift        # renders the icons with CoreGraphics/CoreText (original ∞ mark)

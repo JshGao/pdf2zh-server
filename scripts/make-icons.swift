@@ -68,103 +68,88 @@ func writePNG(_ image: CGImage, to path: String) {
     }
 }
 
-/// The infinity outline, filled rather than stroked.
+/// The app's mark: two interlocking loops, drawn from the vector paths in
+/// assets/download.svg (hand-drawn by the project author).
 ///
-/// Filling is what makes the design possible: the mark is a solid block pierced by two
-/// circular holes, so the remaining material reads as a single ribbon folding back on
-/// itself — the crossing only works because the shape is one continuous area, not two
-/// strokes laid over each other.
+/// The artwork is defined in a 320x240 viewBox with SVG's y-down convention. Paths are
+/// converted once, by hand, with y flipped (y -> 240 - y) so they can live in CoreGraphics'
+/// y-up space; nothing is re-derived at runtime, which keeps this the single source of truth
+/// and avoids pulling an SVG parser into the build.
 ///
-/// The outline is four cubic Beziers forming one closed loop; the lobes meet at the centre
-/// point, so the waist comes out of the geometry instead of being faked.
-///
-/// Proportions are fractions of the canvas, so one description serves 16pt and 1024pt:
-///
-/// | value | meaning |
-/// |---|---|
-/// | `width` 0.96 | the mark spans nearly the full menu bar height budget |
-/// | `lobeHeightRatio` 0.62 | lobe vertical radius as a fraction of the half width. Lower and the lobes flatten into a bow tie; higher and the 22pt mark grows too tall |
-/// | `holeOffset` 0.29 | hole centre distance from the middle, as a fraction of the total width |
-/// | `holeRadius` 0.175 | hole radius, as a fraction of the total width |
-///
-/// The two holes are the entire "design": they carve the solid mass into a ribbon and give
-/// the mark a light centre. Earlier revisions tried an interior spiral line for the same
-/// effect, which turned to mud at 22pt — holes work where lines do not, because a hole
-/// scales as a shape while a 1px line does not.
-func infinityOutline(center: CGPoint, width: CGFloat) -> CGPath {
-    let halfWidth = width / 2
-    let lobeRadius = halfWidth * 0.60
-    let controlPull: CGFloat = 0.52
-    // The two halves meet across a short vertical segment rather than at a single point.
-    // A zero-height waist pinches the ribbon into a spike that all but disappears at 22pt;
-    // this keeps the crossing solid while still reading as one continuous band.
-    let waistHalf = width * 0.03
-    let cx = center.x
-    let cy = center.y
-
+/// Because the two subpaths interlock rather than overlap, they must be filled with the
+/// **non-zero** winding rule. Even-odd would punch the overlap out; non-zero keeps it solid,
+/// which is exactly what makes the loops read as one continuous band.
+func interlockingLoopsPath() -> CGPath {
     let path = CGMutablePath()
-    path.move(to: CGPoint(x: cx - halfWidth, y: cy))
-    path.addCurve(
-        to: CGPoint(x: cx, y: cy + waistHalf),
-        control1: CGPoint(x: cx - halfWidth, y: cy + lobeRadius * 1.55),
-        control2: CGPoint(x: cx - halfWidth * controlPull, y: cy + lobeRadius * 1.12)
-    )
-    path.addCurve(
-        to: CGPoint(x: cx + halfWidth, y: cy),
-        control1: CGPoint(x: cx + halfWidth * controlPull, y: cy + lobeRadius * 1.12),
-        control2: CGPoint(x: cx + halfWidth, y: cy + lobeRadius * 1.55)
-    )
-    path.addCurve(
-        to: CGPoint(x: cx, y: cy - waistHalf),
-        control1: CGPoint(x: cx + halfWidth, y: cy - lobeRadius * 1.55),
-        control2: CGPoint(x: cx + halfWidth * controlPull, y: cy - lobeRadius * 1.12)
-    )
-    path.addCurve(
-        to: CGPoint(x: cx - halfWidth, y: cy),
-        control1: CGPoint(x: cx - halfWidth * controlPull, y: cy - lobeRadius * 1.12),
-        control2: CGPoint(x: cx - halfWidth, y: cy - lobeRadius * 1.55)
-    )
+
+    // Upper-left loop travelling through the middle.
+    path.move(to: CGPoint(x: 296, y: 9))
+    path.addCurve(to: CGPoint(x: 254, y: -3), control1: CGPoint(x: 284, y: 1), control2: CGPoint(x: 269, y: -3))
+    path.addCurve(to: CGPoint(x: 169, y: 79), control1: CGPoint(x: 207, y: -3), control2: CGPoint(x: 169, y: 33))
+    path.addCurve(to: CGPoint(x: 254, y: 162), control1: CGPoint(x: 169, y: 125), control2: CGPoint(x: 207, y: 162))
+    path.addCurve(to: CGPoint(x: 305, y: 145), control1: CGPoint(x: 273, y: 162), control2: CGPoint(x: 289, y: 156))
+    path.addLine(to: CGPoint(x: 387, y: 89))
+    path.addCurve(to: CGPoint(x: 389, y: 57), control1: CGPoint(x: 399, y: 81), control2: CGPoint(x: 400, y: 67))
+    path.addCurve(to: CGPoint(x: 358, y: 56), control1: CGPoint(x: 381, y: 49), control2: CGPoint(x: 369, y: 49))
+    path.addLine(to: CGPoint(x: 278, y: 111))
+    path.addCurve(to: CGPoint(x: 254, y: 120), control1: CGPoint(x: 270, y: 117), control2: CGPoint(x: 262, y: 120))
+    path.addCurve(to: CGPoint(x: 214, y: 79), control1: CGPoint(x: 231, y: 120), control2: CGPoint(x: 214, y: 102))
+    path.addCurve(to: CGPoint(x: 257, y: 35), control1: CGPoint(x: 214, y: 55), control2: CGPoint(x: 232, y: 36))
     path.closeSubpath()
+
+    // Lower-right loop threading back through it.
+    path.move(to: CGPoint(x: 328, y: 149))
+    path.addCurve(to: CGPoint(x: 378, y: 163), control1: CGPoint(x: 343, y: 158), control2: CGPoint(x: 360, y: 163))
+    path.addCurve(to: CGPoint(x: 470, y: 80), control1: CGPoint(x: 429, y: 163), control2: CGPoint(x: 470, y: 127))
+    path.addCurve(to: CGPoint(x: 380, y: -3), control1: CGPoint(x: 470, y: 33), control2: CGPoint(x: 432, y: -3))
+    path.addCurve(to: CGPoint(x: 306, y: 20), control1: CGPoint(x: 352, y: -4), control2: CGPoint(x: 328, y: 4))
+    path.addLine(to: CGPoint(x: 242, y: 66))
+    path.addCurve(to: CGPoint(x: 239, y: 96), control1: CGPoint(x: 231, y: 74), control2: CGPoint(x: 229, y: 86))
+    path.addCurve(to: CGPoint(x: 268, y: 98), control1: CGPoint(x: 247, y: 105), control2: CGPoint(x: 258, y: 105))
+    path.addLine(to: CGPoint(x: 344, y: 44))
+    path.addCurve(to: CGPoint(x: 410, y: 49), control1: CGPoint(x: 365, y: 29), control2: CGPoint(x: 392, y: 32))
+    path.addCurve(to: CGPoint(x: 414, y: 107), control1: CGPoint(x: 430, y: 67), control2: CGPoint(x: 430, y: 91))
+    path.addCurve(to: CGPoint(x: 373, y: 118), control1: CGPoint(x: 404, y: 118), control2: CGPoint(x: 390, y: 122))
+    path.closeSubpath()
+
     return path
 }
 
-/// Add the two ribbon holes to an outline, returning a path meant to be filled even-odd.
-func infinityRibbon(center: CGPoint, width: CGFloat) -> CGPath {
-    let path = CGMutablePath()
-    path.addPath(infinityOutline(center: center, width: width))
-    let offset = width * 0.29
-    let radius = width * 0.175
-    for sign in [-1.0, 1.0] {
-        path.addEllipse(
-            in: CGRect(
-                x: center.x + CGFloat(sign) * offset - radius,
-                y: center.y - radius,
-                width: radius * 2,
-                height: radius * 2
-            )
-        )
-    }
-    return path
-}
-
-/// The status bar mark: a solid ∞ pierced by two holes, filled even-odd.
+/// Scale the mark so its ink box fits `box`, centred on the box's midpoint.
 ///
-/// No stroke anywhere — a stroked version of this shape at 22pt sits next to the solid
-/// system glyphs as a hairline, while the filled ribbon has the same blocky presence.
+/// Fitting by measured ink bounds rather than by the viewBox means the artwork's own
+/// margins are ignored automatically: the mark always fills the space it is given,
+/// whatever padding the SVG happens to carry.
+func fittedMark(in box: CGRect, fill: CGFloat) -> CGPath {
+    let source = interlockingLoopsPath()
+    let ink = source.boundingBoxOfPath
+    guard ink.width > 0, ink.height > 0 else { return source }
+
+    let scale = min(box.width * fill / ink.width, box.height * fill / ink.height)
+    var transform = CGAffineTransform(
+        translationX: box.midX, y: box.midY
+    )
+    .scaledBy(x: scale, y: scale)
+    .translatedBy(x: -ink.midX, y: -ink.midY)
+
+    return source.copy(using: &transform) ?? source
+}
+
+/// The status bar mark: the interlocking loops, filled.
 func drawFramedMark(in context: CGContext, canvas: CGFloat, color: CGColor) {
     context.saveGState()
-    context.addPath(infinityRibbon(center: CGPoint(x: canvas / 2, y: canvas / 2), width: canvas * 0.96))
+    context.addPath(fittedMark(in: CGRect(x: 0, y: 0, width: canvas, height: canvas), fill: 0.94))
     context.setFillColor(color)
-    context.fillPath(using: .evenOdd)
+    // Non-zero: the two loops interlock, so their overlap must stay solid.
+    context.fillPath()
     context.restoreGState()
 }
 
-/// The app icon: a rounded tile with a blue gradient and a heavy white ∞ centred on it.
+/// The app icon: a rounded tile with a blue gradient carrying the mark in white.
 ///
-/// The gradient (rather than a flat fill) plus the generous inset are what keep it from
-/// reading as a placeholder. The ∞ uses the same filled-ribbon geometry as the status bar
-/// mark, filled white with even-odd so the two holes let the blue show through — the two
-/// icons read as the same object at different scales.
+/// Same artwork as the status bar mark (see `interlockingLoopsPath`), just fitted to the
+/// tile at 80% and filled non-zero. The gradient rather than a flat fill, plus the generous
+/// inset, are what keep it from reading as a placeholder.
 func drawAppTile(in context: CGContext, canvas: CGFloat) {
     let inset = canvas * 0.055
     let rect = CGRect(x: inset, y: inset, width: canvas - inset * 2, height: canvas - inset * 2)
@@ -195,11 +180,10 @@ func drawAppTile(in context: CGContext, canvas: CGFloat) {
 
     context.saveGState()
     context.addPath(
-        infinityRibbon(center: CGPoint(x: rect.midX, y: rect.midY), width: rect.width * 0.80)
+        fittedMark(in: rect, fill: 0.80)
     )
     context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-    context.fillPath(using: .evenOdd)
-    context.restoreGState()
+    context.fillPath()
 }
 
 // MARK: - App icon (1024pt master)

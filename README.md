@@ -48,7 +48,7 @@ PDF2ZH_REGEN_ICONS=1 ./build.sh   # 改了 scripts/make-icons.swift 后重新渲
 也可以直接下载 Releases 里现成的产物：`PDF2ZH Web-<版本>.dmg`（内含 App 和指向 `/Applications` 的快捷方式）
 或 `PDF2ZH Web-<版本>.zip`。推一个 `v*` 标签，CI 会在 macOS runner 上构建、验收并打包发布。
 
-启动后右上角状态栏出现一个**实心 ∞（带两个圆孔，如丝带折返）**：这是一张黑字 + 透明底的模板图，
+启动后右上角状态栏出现**两个互锁的环**（作者手绘的矢量标识）：这是一张黑字 + 透明底的模板图，
 浅色菜单栏显示为黑色，深色菜单栏自动变白。程序坞和 Cmd-Tab 里都不会出现它（`LSUIElement=true`）。
 Finder 里看到的 App 图标是圆角蓝色渐变底板 + 居中的白色 ∞。
 
@@ -212,8 +212,9 @@ pdf2zh-server/
 ├── main.swift                  # 菜单栏 App 全部源码（配置、状态机、posix_spawn、就绪探测、清理）
 ├── build.sh                    # 构建 .app：编译 + 图标 + Info.plist + ad-hoc 签名
 ├── assets/
-│   ├── AppIcon.icns            # 提交的 App 图标产物（构建时的真源）
-│   ├── pdf2zh-status.png       # 提交的状态栏图标产物（实心 ∞ + 双圆孔，黑字 + 透明底，可作模板图）
+│   ├── download.svg            # 图形真源（手绘矢量稿）
+│   ├── AppIcon.icns            # 提交的 App 图标产物
+│   ├── pdf2zh-status.png       # 提交的状态栏图标产物（互锁环，黑字 + 透明底，可作模板图）
 │   └── icon-preview.png        # README 预览图
 ├── scripts/
 │   ├── make-icons.swift        # CoreGraphics/CoreText 渲染图标（原创 ∞ 标识）
