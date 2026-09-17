@@ -177,6 +177,20 @@ printf 'y\nn\n' | <venv>/bin/python <server.py> --port 8890
 - 该窗口内继续轮询，避免图标卡在满绿；窗口结束才停表。
 - 只在图标依赖的东西真正变化时重绘（`lastIconSignature` 比较），因为绘制的开销远大于比较。
 
+**为什么进度会长时间停在 0%——这不是故障。** server 的 `MAIN_PROGRESS_RE` 只认
+`translate X/Y` 这种逐页进度行；在此之前 pdf2zh_next 要走完 BabelDOC 的一长串子步骤
+（`DetectScannedFile`、`Layout`、`Paragraphs`、术语抽取……），那些行形如 `Layout (1/1) 2/2`，
+只会更新任务的 `message`（"正在初始化…"），**不会更新 `progress`**。所以一篇论文的进度条
+可能几分钟都停在 0%，之后才开始逐页爬升。判断链路是否正常，看 `message` 是否在变，而不是
+看百分比。
+
+**一个已修复的严重 bug（记录以免重犯）**：轮询的停止判据最初写成
+`fraction == nil && !justCompleted` 就停表。但 `fraction == nil` 在**启动时**也成立
+（什么都还没观察到），于是追踪器在第一次 tick 后就把自己停了——之后再开始的翻译
+永远不会被看到，图标自然一直不变绿。正确判据必须是"**曾经观察到过任务**、且完成提示已过期"
+（`hasSeenTasks && !justCompleted`）。教训：用"当前值为空"表达"已经结束"，会在"还没开始"
+时误触发；这类状态必须用独立标志区分三态（未开始 / 进行中 / 已结束）。
+
 ### 4.2.3 更新检查（FR-19）
 
 **只检查，不下载、不安装。** 升级 pdf2zh_next 可能带来新的 BabelDOC 并触发资产重新下载；

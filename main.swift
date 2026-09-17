@@ -920,9 +920,16 @@ final class ProgressTracker {
     private(set) var taskCount: Int = 0
     /// Set briefly when work finishes, so the icon can show a completed state.
     private var completedAt: Date?
+    /// True once any task has actually been observed; distinguishes "idle so far" (keep
+    /// polling — work may start at any time) from "finished" (stop after the banner).
+    private var hasSeenTasks = false
 
     /// Called on the main queue when the reported progress changes.
     var onChange: (() -> Void)?
+    /// Optional sink for a short diagnostic line whenever the reported progress changes.
+    /// Without this, a user reporting "the icon never turns green" cannot be told apart from
+    /// "nothing was translating yet", because the app otherwise keeps no record of what it saw.
+    var onDiagnostic: ((String) -> Void)?
 
     init(port: Int, interval: TimeInterval) {
         self.port = port
@@ -949,14 +956,23 @@ final class ProgressTracker {
     func stop() {
         timer?.invalidate()
         timer = nil
+        // A future start() must again begin from "nothing observed yet".
+        hasSeenTasks = false
+        completedAt = nil
     }
 
     private func poll() {
         guard !inFlight else { return }
 
-        // Once the last task disappears, keep polling until the completion banner expires:
-        // the icon holds full green during that window and needs a tick to return to normal.
-        if timer != nil, fraction == nil, !justCompleted {
+        // Once a run has been *seen* and then finished, keep polling until the completion
+        // banner expires — the icon holds full green during that window and needs one more
+        // tick to return to normal — and only then stop.
+        //
+        // The guard must key on `hasSeenTasks`, not on `fraction == nil`: at launch nothing
+        // has been observed yet, so a nil fraction means "idle so far", not "finished".
+        // Testing `fraction == nil` alone stopped the tracker on its first tick, which is why
+        // a translation started later never showed up in the menu bar.
+        if timer != nil, hasSeenTasks, !justCompleted {
             stop()
             return
         }
@@ -1005,13 +1021,21 @@ final class ProgressTracker {
             completedAt = nil
             fraction = min(1.0, max(0.0, percentages.reduce(0, +) / Double(percentages.count) / 100.0))
             taskCount = percentages.count
+            hasSeenTasks = true
             _ = held
         } else {
             fraction = min(1.0, max(0.0, percentages.reduce(0, +) / Double(percentages.count) / 100.0))
             taskCount = percentages.count
+            hasSeenTasks = true
         }
 
         if fraction != previous || taskCount != previousCount {
+            if let fraction {
+                let percent = Int((fraction * 100).rounded())
+                onDiagnostic?("进度 \(percent)%（\(taskCount) 个任务）")
+            } else {
+                onDiagnostic?("翻译任务结束")
+            }
             onChange?()
         } else if previous == nil, justCompleted {
             // Keep refreshing while the "completed" note is on screen so it expires.
@@ -1312,8 +1336,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startProgressTracking() {
         let tracker = ProgressTracker(port: config.zoteroPort, interval: config.zoteroProgressPollSeconds)
         tracker.onChange = { [weak self] in self?.updateMenu() }
+        tracker.onDiagnostic = { [weak self] message in
+            self?.appendDiagnostic(message)
+        }
         tracker.start()
         progressTracker = tracker
+    }
+
+    /// Append an app-level note to the WebUI log. The file is already 0600 and is the place
+    /// users are told to look, so app events go there too, prefixed so they are easy to pick
+    /// out from the service's own output.
+    private func appendDiagnostic(_ message: String) {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let line = "pdf2zh-web[app]: \(stamp) \(message)\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if let handle = FileHandle(forWritingAtPath: config.logPath) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: URL(fileURLWithPath: config.logPath))
+        }
     }
 
     /// Ask both upstreams whether newer releases exist. Nothing is installed; the menu
