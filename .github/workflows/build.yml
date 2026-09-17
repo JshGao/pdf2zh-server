@@ -1,0 +1,88 @@
+name: Build & Release
+
+# push 到 main 或开 PR：构建 + 验收（CI）
+# 推 v* 标签：额外把 .dmg / .zip 发布到 GitHub Release
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # gh release create 需要
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析版本号
+        id: version
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=1.0.0" >> "$GITHUB_OUTPUT"
+          fi
+
+      # verify.sh 要在运行期验收里真的拉起服务并检查 HTTP 200，所以 runner 上必须先装好
+      # pdf2zh_next。用官方推荐的 uv tool 安装方式，这样 CI 顺带验证了 App 的自动探测逻辑
+      # （探测列表第一项就是 uv tool 的安装位置）。
+      - name: 安装 pdf2zh_next（验收依赖）
+        run: |
+          if ! command -v uv >/dev/null 2>&1; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+          fi
+          export PATH="$HOME/.local/bin:$PATH"
+          uv tool install --python 3.12 pdf2zh-next
+          ls -la "$HOME/.local/share/uv/tools/pdf2zh-next/bin/pdf2zh_next"
+
+      - name: 构建
+        env:
+          PDF2ZH_VERSION: ${{ steps.version.outputs.value }}
+        run: ./build.sh
+
+      - name: 验收
+        run: ./scripts/verify.sh
+
+      - name: 打包（.zip / .dmg）
+        run: ./scripts/package.sh "${{ steps.version.outputs.value }}"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: PDF2ZH-Web-${{ steps.version.outputs.value }}
+          path: build/dist/*
+          if-no-files-found: error
+
+      - name: 发布 Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > /tmp/release-notes.md <<'NOTES'
+          ## 安装
+
+          下载 `.dmg`，打开后把 **PDF2ZH Web** 拖进 `Applications`。
+
+          > **首次打开会被 Gatekeeper 拦下。** 本 App 是 ad-hoc 签名、未做 Apple 公证，首次双击会提示
+          > “无法打开，因为 Apple 无法检查其是否包含恶意软件”。任选一种解决办法：
+          >
+          > - 在“应用程序”里**右键（或 Control-点击）图标 → 打开 → 再点“打开”**，之后就能正常双击；
+          > - 或终端执行 `xattr -dr com.apple.quarantine "/Applications/PDF2ZH Web.app"`。
+
+          ## 运行前提
+
+          本 App 只是启动器，**不包含也不自动安装** `pdf2zh_next`。请先安装：
+
+          ```bash
+          uv tool install --python 3.12 pdf2zh-next
+          ```
+
+          未安装时 App 会在菜单栏明示并给出安装引导。
+          NOTES
+          gh release create "${GITHUB_REF_NAME}" build/dist/* \
+            --title "PDF2ZH Web ${GITHUB_REF_NAME#v}" \
+            --notes-file /tmp/release-notes.md

@@ -1,0 +1,11 @@
+# 构建产物：.app、图标中间件、Swift module cache、打包输出
+build/
+
+# macOS
+.DS_Store
+._*
+
+# 编辑器 / IDE
+*.swp
+.idea/
+.vscode/
